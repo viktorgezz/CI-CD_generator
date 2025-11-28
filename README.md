@@ -1,15 +1,21 @@
 # Self-Deploy
 
 CLI приложение для автоматического анализа технологического стека репозиториев и генерации CI/CD пайплайнов для GitLab. 
+
 Разработано для хакатона [Т1. Москва](https://impulse.t1.ru/event/mIadtUgt)
 
 Команда: **Back2Back**
 
 **Участики:**
+
 Лулаков Даниил - Dev-ops, Team-Lead
+
 Гезенцвей Виктор - Project Manager, Architect, Designer
+
 Колесникова Лариса - Dev-ops, QA
+
 Беляев Валерий - Buisnes Analiticts
+
 Сорокина Полина - AI
 
 ## Структура проекта
