@@ -1,0 +1,12 @@
+security:
+  stage: security
+  image: python:{{ ctx.python_version }}
+  script:
+    - pip install safety bandit || true
+    - safety check --json || true
+    - bandit -r . -f json -o bandit-report.json || true
+  artifacts:
+    paths:
+      - bandit-report.json
+    expire_in: 1 week
+

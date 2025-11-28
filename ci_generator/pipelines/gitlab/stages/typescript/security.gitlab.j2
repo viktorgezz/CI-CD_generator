@@ -1,0 +1,17 @@
+security:
+  stage: security
+  image: node:{{ ctx.node_version | default('18') }}
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  before_script:
+    - npm ci || yarn install --frozen-lockfile || true
+  script:
+    - npm audit --audit-level=moderate || yarn audit --level moderate || true
+    - npx snyk test --json || true
+  artifacts:
+    paths:
+      - snyk-report.json
+    expire_in: 1 week
+

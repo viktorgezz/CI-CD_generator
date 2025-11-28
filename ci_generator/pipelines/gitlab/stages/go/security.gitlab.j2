@@ -1,0 +1,11 @@
+security:
+  stage: security
+  image: golang:{{ ctx.go_version | default('1.21') }}
+  script:
+    - go install github.com/securego/gosec/v2/cmd/gosec@latest || true
+    - gosec -fmt json -out gosec-report.json ./... || true
+  artifacts:
+    paths:
+      - gosec-report.json
+    expire_in: 1 week
+

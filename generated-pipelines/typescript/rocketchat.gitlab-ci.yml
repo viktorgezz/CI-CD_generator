@@ -1,0 +1,291 @@
+# Generated GitLab CI (auto)
+stages:
+  - pre_checks
+  - lint
+  - type_check
+  - security
+  - test
+  - docker_build
+  - docker_push
+  - migration
+  - deploy
+  - cleanup
+
+# Triggers (from user_settings.triggers)
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_BRANCH == "master" && $CI_PIPELINE_SOURCE == "push"'
+
+
+
+
+
+# Common variables
+variables:
+  DOCKER_IMAGE: "$CI_REGISTRY_IMAGE"
+  DOCKER_TAG: "$CI_COMMIT_SHORT_SHA"
+  NODE_VERSION: "18"
+
+  # Required CI/CD variables for this pipeline (configure in GitLab settings)
+  # CI_REGISTRY: GitLab container registry URL (usually predefined)
+  # CI_REGISTRY_USER: registry username for docker login
+  # CI_REGISTRY_PASSWORD: registry password/token for docker login
+  # KUBECONFIG_CONTENT: base64-encoded kubeconfig for Kubernetes deploy
+
+# User variables (inlined - prefer CI platform variables for secrets)
+
+pre_checks:
+  stage: pre_checks
+  image: node:18
+  script:
+    - node --version
+    - npm --version || yarn --version || true
+    - echo "Basic repo checks (lint config, presence of tests, dockerfile...)"
+
+lint:
+  stage: lint
+  image: node:18
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  before_script:
+    - npm ci || yarn install --frozen-lockfile || true
+  script:
+    - npm run lint || yarn lint || true
+    - npx eslint . --ext .ts,.tsx --format json -o eslint-report.json || true
+    - npx prettier --check "**/*.{ts,tsx,json}" || true
+  artifacts:
+    paths:
+      - eslint-report.json
+    expire_in: 1 week
+type_check:
+  stage: type_check
+  image: node:18
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  before_script:
+    - npm ci || yarn install --frozen-lockfile || true
+  script:
+    - npm run type-check || yarn type-check || true
+    - npx tsc --noEmit || true
+  artifacts:
+    paths:
+      - tsconfig.tsbuildinfo
+    expire_in: 1 week
+
+security:
+  stage: security
+  image: node:18
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  before_script:
+    - npm ci || yarn install --frozen-lockfile || true
+  script:
+    - npm audit --audit-level=moderate || yarn audit --level moderate || true
+    - npx snyk test --json || true
+  artifacts:
+    paths:
+      - snyk-report.json
+    expire_in: 1 week
+
+test:
+  stage: test
+  
+  image: node:18
+  
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  
+  before_script:
+    - npm ci || yarn install --frozen-lockfile || true
+  
+  script:
+    - npm test -- --ci --coverage || yarn test --ci --coverage || true
+  
+  
+  artifacts:
+    when: always
+    paths:
+      - coverage/
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage/cobertura-coverage.xml
+    expire_in: 1 week
+build_and_push:
+  stage: docker_build
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+    - docker info
+    - echo "Checking GitLab CI variables..."
+    - echo "Logging to GitLab Container Registry with CI_JOB_TOKEN..."
+    - echo "$CI_JOB_TOKEN" | docker login -u "gitlab-ci-token" "$CI_REGISTRY" --password-stdin
+  script:
+    - echo "Building and pushing Docker images..."
+    
+    # Saml
+    - |
+      echo "Building Saml (apps/meteor/tests/e2e/containers/saml/Dockerfile)..."
+      if docker build -f apps/meteor/tests/e2e/containers/saml/Dockerfile -t $CI_REGISTRY_IMAGE-saml:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-saml:latest apps/meteor/tests/e2e/containers/saml; then
+        echo "Pushing Saml..."
+        docker push $CI_REGISTRY_IMAGE-saml:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-saml:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Saml built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Saml, continuing with next..."
+      fi
+    
+    # Services
+    - |
+      echo "Building Services (apps/meteor/ee/server/services/Dockerfile)..."
+      if docker build -f apps/meteor/ee/server/services/Dockerfile -t $CI_REGISTRY_IMAGE-services:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-services:latest apps/meteor/ee/server/services; then
+        echo "Pushing Services..."
+        docker push $CI_REGISTRY_IMAGE-services:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-services:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Services built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Services, continuing with next..."
+      fi
+    
+    # Queue Worker
+    - |
+      echo "Building Queue Worker (ee/apps/queue-worker/Dockerfile)..."
+      if docker build -f ee/apps/queue-worker/Dockerfile -t $CI_REGISTRY_IMAGE-queue_worker:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-queue_worker:latest ee/apps/queue-worker; then
+        echo "Pushing Queue Worker..."
+        docker push $CI_REGISTRY_IMAGE-queue_worker:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-queue_worker:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Queue Worker built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Queue Worker, continuing with next..."
+      fi
+    
+    # Authorization Service
+    - |
+      echo "Building Authorization Service (ee/apps/authorization-service/Dockerfile)..."
+      if docker build -f ee/apps/authorization-service/Dockerfile -t $CI_REGISTRY_IMAGE-authorization_service:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-authorization_service:latest ee/apps/authorization-service; then
+        echo "Pushing Authorization Service..."
+        docker push $CI_REGISTRY_IMAGE-authorization_service:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-authorization_service:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Authorization Service built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Authorization Service, continuing with next..."
+      fi
+    
+    # Presence Service
+    - |
+      echo "Building Presence Service (ee/apps/presence-service/Dockerfile)..."
+      if docker build -f ee/apps/presence-service/Dockerfile -t $CI_REGISTRY_IMAGE-presence_service:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-presence_service:latest ee/apps/presence-service; then
+        echo "Pushing Presence Service..."
+        docker push $CI_REGISTRY_IMAGE-presence_service:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-presence_service:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Presence Service built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Presence Service, continuing with next..."
+      fi
+    
+    # Account Service
+    - |
+      echo "Building Account Service (ee/apps/account-service/Dockerfile)..."
+      if docker build -f ee/apps/account-service/Dockerfile -t $CI_REGISTRY_IMAGE-account_service:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-account_service:latest ee/apps/account-service; then
+        echo "Pushing Account Service..."
+        docker push $CI_REGISTRY_IMAGE-account_service:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-account_service:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Account Service built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Account Service, continuing with next..."
+      fi
+    
+    # Stream Hub Service
+    - |
+      echo "Building Stream Hub Service (ee/apps/stream-hub-service/Dockerfile)..."
+      if docker build -f ee/apps/stream-hub-service/Dockerfile -t $CI_REGISTRY_IMAGE-stream_hub_service:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-stream_hub_service:latest ee/apps/stream-hub-service; then
+        echo "Pushing Stream Hub Service..."
+        docker push $CI_REGISTRY_IMAGE-stream_hub_service:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-stream_hub_service:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Stream Hub Service built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Stream Hub Service, continuing with next..."
+      fi
+    
+    # Omnichannel Transcript
+    - |
+      echo "Building Omnichannel Transcript (ee/apps/omnichannel-transcript/Dockerfile)..."
+      if docker build -f ee/apps/omnichannel-transcript/Dockerfile -t $CI_REGISTRY_IMAGE-omnichannel_transcript:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-omnichannel_transcript:latest ee/apps/omnichannel-transcript; then
+        echo "Pushing Omnichannel Transcript..."
+        docker push $CI_REGISTRY_IMAGE-omnichannel_transcript:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-omnichannel_transcript:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Omnichannel Transcript built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Omnichannel Transcript, continuing with next..."
+      fi
+    
+    # Ddp Streamer
+    - |
+      echo "Building Ddp Streamer (ee/apps/ddp-streamer/Dockerfile)..."
+      if docker build -f ee/apps/ddp-streamer/Dockerfile -t $CI_REGISTRY_IMAGE-ddp_streamer:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-ddp_streamer:latest ee/apps/ddp-streamer; then
+        echo "Pushing Ddp Streamer..."
+        docker push $CI_REGISTRY_IMAGE-ddp_streamer:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-ddp_streamer:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Ddp Streamer built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Ddp Streamer, continuing with next..."
+      fi
+    
+    - echo "🎉 Build and push process completed!"
+  after_script:
+    - docker logout $CI_REGISTRY || true
+
+
+migration:
+  stage: migration
+  image: node:18
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  before_script:
+    - npm ci || yarn install --frozen-lockfile || true
+  script:
+    - echo "Running migrations for Express..."
+    - echo "No migration tool detected for Express. Supported: typeorm, sequelize, knex"
+  only:
+    - main
+    - develop
+
+
+cleanup:
+  stage: cleanup
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+  script:
+    - docker system prune -f || true

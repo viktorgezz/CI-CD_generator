@@ -1,0 +1,6 @@
+click==8.1.7
+pydantic==2.9.2
+SQLAlchemy==2.0.36
+psycopg2-binary==2.9.10
+python-gitlab==4.2.0
+jinja2

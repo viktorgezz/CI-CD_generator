@@ -1,0 +1,30 @@
+migration:
+  stage: migration
+  image: golang:{{ ctx.go_version | default('1.21') }}
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .go/pkg/mod/
+  before_script:
+    - mkdir -p .go
+    - export GOPATH=${CI_PROJECT_DIR}/.go
+  script:
+    - go mod download || true
+    {% set migration_tools = (ctx.analysis.migration_tools or []) | map('lower') | list %}
+    {% if 'migrate' in migration_tools or 'golang-migrate' in migration_tools %}
+    - go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest || true
+    - ${GOPATH}/bin/migrate -path ./migrations -database "${DATABASE_URL}" up || true
+    {% elif 'goose' in migration_tools %}
+    - go install github.com/pressly/goose/v3/cmd/goose@latest || true
+    - ${GOPATH}/bin/goose -dir ./migrations postgres "${DATABASE_URL}" up || true
+    {% elif 'gorm' in migration_tools or 'gormigrate' in migration_tools %}
+    - go run ./migrations/main.go || true
+    {% elif 'atlas' in migration_tools %}
+    - curl -sSf https://atlasgo.sh | sh || true
+    - atlas migrate apply --url "${DATABASE_URL}" || true
+    {% else %}
+    - echo "No migration tool detected" || true
+    {% endif %}
+  only:
+    - main
+    - develop

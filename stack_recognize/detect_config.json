@@ -1,0 +1,155 @@
+{
+  "languages": {
+    "python": {
+      "extensions": [".py", ".pyw", ".pyx", ".pxd", ".pyi"],
+      "config_files": ["requirements.txt", "pyproject.toml", "setup.py", "Pipfile", "tox.ini"],
+      "package_managers": ["pip", "poetry", "pipenv"]
+    },
+    "typescript": {
+      "extensions": [".ts", ".tsx", ".js", ".jsx"],
+      "config_files": ["tsconfig.json", "package.json"],
+      "package_managers": ["npm", "yarn", "pnpm"]
+    },
+    "java": {
+      "extensions": [".java", ".jar", ".war", ".class", ".kt", ".kts"],
+      "config_files": ["pom.xml", "build.gradle", "build.gradle.kts", "build.xml"],
+      "package_managers": ["maven", "gradle"]
+    },
+    "go": {
+      "extensions": [".go"],
+      "config_files": ["go.mod", "go.sum", "Gopkg.toml", "glide.yaml"],
+      "package_managers": ["go mod", "dep", "glide"]
+    }
+  },
+  "frameworks": {
+    "django": {
+      "files": ["manage.py", "wsgi.py", "asgi.py"],
+      "patterns": ["from django", "import django", "django\\."],
+      "dependencies": ["django"]
+    },
+    "flask": {
+      "files": ["app.py", "application.py"],
+      "patterns": ["from flask", "import flask", "flask\\."],
+      "dependencies": ["flask"]
+    },
+    "fastapi": {
+      "files": [],
+      "patterns": ["from fastapi", "import fastapi", "fastapi\\."],
+      "dependencies": ["fastapi"]
+    },
+    "react": {
+      "files": ["package.json"],
+      "patterns": ["import React", "from 'react'", "from \"react\""],
+      "dependencies": ["react"]
+    },
+    "vue": {
+      "files": ["package.json", "vue.config.js"],
+      "patterns": ["import Vue", "from 'vue'", "createApp"],
+      "dependencies": ["vue"]
+    },
+    "angular": {
+      "files": ["angular.json", "package.json"],
+      "patterns": ["@angular", "import.*from '@angular/"],
+      "dependencies": ["@angular/core"]
+    },
+    "express": {
+      "files": ["package.json", "app.js", "server.js"],
+      "patterns": ["require\\('express'\\)", "from 'express'"],
+      "dependencies": ["express"]
+    },
+    "nestjs": {
+      "files": ["nest-cli.json", "package.json"],
+      "patterns": ["@nestjs", "import.*from '@nestjs/"],
+      "dependencies": ["@nestjs/core"]
+    },
+    "nextjs": {
+      "files": ["next.config.js", "package.json"],
+      "patterns": ["import.*from 'next'", "getServerSideProps"],
+      "dependencies": ["next"]
+    },
+    "spring-boot": {
+      "files": ["pom.xml", "build.gradle", "application.properties"],
+      "patterns": ["@SpringBootApplication", "org.springframework"],
+      "dependencies": ["spring-boot"]
+    },
+    "spring": {
+      "files": ["pom.xml", "build.gradle"],
+      "patterns": ["org\\.springframework", "@SpringBootApplication", "SpringApplication"],
+      "dependencies": ["spring-framework"]
+    },
+    "quarkus": {
+      "files": ["pom.xml", "application.properties"],
+      "patterns": ["io\\.quarkus", "@QuarkusTest"],
+      "dependencies": ["quarkus"]
+    },
+    "micronaut": {
+      "files": ["micronaut-cli.yml"],
+      "patterns": ["io\\.micronaut", "@MicronautTest"],
+      "dependencies": ["micronaut"]
+    },
+    "vertx": {
+      "files": ["pom.xml", "build.gradle"],
+      "patterns": ["io\\.vertx", "Vertx"],
+      "dependencies": ["vertx"]
+    },
+    "gin": {
+      "files": ["go.mod"],
+      "patterns": ["github.com/gin-gonic/gin"],
+      "dependencies": ["github.com/gin-gonic/gin"]
+    },
+    "echo": {
+      "files": ["go.mod"],
+      "patterns": ["github.com/labstack/echo"],
+      "dependencies": ["github.com/labstack/echo"]
+    },
+    "fiber": {
+      "files": ["go.mod"],
+      "patterns": ["github.com/gofiber/fiber"],
+      "dependencies": ["github.com/gofiber/fiber"]
+    },
+    "beego": {
+      "files": ["go.mod"],
+      "patterns": ["github.com/astaxie/beego"],
+      "dependencies": ["github.com/astaxie/beego"]
+    }
+  },
+  "package_managers": {
+    "npm": {"files": ["package.json", "package-lock.json"]},
+    "yarn": {"files": ["package.json", "yarn.lock"]},
+    "pnpm": {"files": ["package.json", "pnpm-lock.yaml"]},
+    "pip": {"files": ["requirements.txt", "setup.py"]},
+    "poetry": {"files": ["pyproject.toml", "poetry.lock"]},
+    "pipenv": {"files": ["Pipfile", "Pipfile.lock"]},
+    "maven": {"files": ["pom.xml"]},
+    "gradle": {"files": ["build.gradle", "build.gradle.kts", "gradlew"]},
+    "go mod": {"files": ["go.mod", "go.sum"]}
+  },
+  "test_runners": {
+    "pytest": {"files": ["pytest.ini", "conftest.py"], "patterns": ["import pytest", "@pytest"]},
+    "unittest": {"files": [], "patterns": ["import unittest", "unittest.main"]},
+    "jest": {"files": ["jest.config.js", "jest.config.ts"], "patterns": ["jest\\.", "describe\\(", "test\\("]},
+    "mocha": {"files": [".mocharc.js", ".mocharc.json"], "patterns": ["describe\\(", "it\\("]},
+    "junit": {"files": [], "patterns": ["@Test", "org.junit"]},
+    "testng": {"files": [], "patterns": ["@Test", "org.testng"]}
+  },
+  "cicd": {
+    "github": {"files": [".github/workflows/*.yml", ".github/workflows/*.yaml"]},
+    "gitlab": {"files": [".gitlab-ci.yml"]},
+    "jenkins": {"files": ["Jenkinsfile"]},
+    "bitbucket": {"files": ["bitbucket-pipelines.yml"]},
+    "azure": {"files": ["azure-pipelines.yml"]},
+    "circleci": {"files": [".circleci/config.yml"]},
+    "travis": {"files": [".travis.yml"]},
+    "teamcity": {"files": [".teamcity/"]},
+    "bamboo": {"files": ["bamboo-specs/"]}
+  },
+  "devops": {
+    "docker": {"files": ["Dockerfile", "docker-compose.yml", ".dockerignore"]},
+    "kubernetes": {"files": ["k8s/", "manifests/", "*.yaml", "*.yml"]},
+    "helm": {"files": ["Chart.yaml", "charts/", "templates/"]},
+    "terraform": {"files": ["*.tf", "terraform/", ".terraform.lock.hcl"]},
+    "ansible": {"files": ["ansible.cfg", "inventory", "playbook.yml"]},
+    "vagrant": {"files": ["Vagrantfile"]},
+    "packer": {"files": ["*.pkr.hcl", "packer.json"]}
+  }
+}

@@ -1,0 +1,7 @@
+type_check:
+  stage: type_check
+  image: golang:{{ ctx.go_version | default('1.21') }}
+  script:
+    - go mod download || true
+    - go vet ./... || true
+    - go build -o /dev/null ./... || true

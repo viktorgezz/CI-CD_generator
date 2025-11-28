@@ -1,0 +1,19 @@
+code_quality:
+  stage: code_quality
+  image: python:{{ ctx.python_version }}
+  dependencies:
+    - test
+    - lint
+  script:
+    - pip install sonar-scanner || true
+    - sonar-scanner \
+        -Dsonar.projectKey=${CI_PROJECT_NAME} \
+        -Dsonar.sources=. \
+        -Dsonar.host.url=${SONAR_HOST_URL} \
+        -Dsonar.login=${SONAR_TOKEN} \
+        -Dsonar.python.coverage.reportPaths=coverage.xml \
+        || true
+  only:
+    - merge_requests
+    - main
+

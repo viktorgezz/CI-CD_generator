@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: self-deploy-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: self_deploy
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  cli:
+    build:
+      context: ..
+      dockerfile: core-service/Dockerfile
+    container_name: self-deploy-cli
+    environment:
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/self_deploy
+    volumes:
+      # Монтируем корень проекта в /app для сохранения структуры путей
+      - ..:/app:ro
+      # Монтируем директорию для вывода результатов (запись разрешена)
+      - ./output:/output
+    working_dir: /app/core-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # По умолчанию показываем help, можно переопределить через docker-compose run
+    command: ["--help"]
+
+volumes:
+  postgres_data:
+

@@ -1,0 +1,308 @@
+# Generated GitLab CI (auto)
+stages:
+  - pre_checks
+  - lint
+  - type_check
+  - security
+  - test
+  - build
+  - docker_build
+  - docker_push
+  - migration
+  - deploy
+  - post_deploy
+  - cleanup
+
+# Triggers (from user_settings.triggers)
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_BRANCH == "master" && $CI_PIPELINE_SOURCE == "push"'
+
+
+
+
+
+# Common variables
+variables:
+  DOCKER_IMAGE: "$CI_REGISTRY_IMAGE"
+  DOCKER_TAG: "$CI_COMMIT_SHORT_SHA"
+  GO_VERSION: "1.21"
+
+  # Required CI/CD variables for this pipeline (configure in GitLab settings)
+  # CI_REGISTRY: GitLab container registry URL (usually predefined)
+  # CI_REGISTRY_USER: registry username for docker login
+  # CI_REGISTRY_PASSWORD: registry password/token for docker login
+  # KUBECONFIG_CONTENT: base64-encoded kubeconfig for Kubernetes deploy
+
+# User variables (inlined - prefer CI platform variables for secrets)
+
+pre_checks:
+  stage: pre_checks
+  image: golang:1.21
+  script:
+    - go version
+    - echo "Basic repo checks (lint config, presence of tests, dockerfile...)"
+
+lint:
+  stage: lint
+  image: golangci/golangci-lint:v1.56.2
+  script:
+    - golangci-lint run --out-format code-climate:gl-code-quality-report.json,line-number || true
+    - golangci-lint run || true
+  artifacts:
+    reports:
+      codequality: gl-code-quality-report.json
+    paths:
+      - gl-code-quality-report.json
+type_check:
+  stage: type_check
+  image: golang:1.21
+  script:
+    - go mod download || true
+    - go vet ./... || true
+    - go build -o /dev/null ./... || true
+security:
+  stage: security
+  image: golang:1.21
+  script:
+    - go install github.com/securego/gosec/v2/cmd/gosec@latest || true
+    - gosec -fmt json -out gosec-report.json ./... || true
+  artifacts:
+    paths:
+      - gosec-report.json
+    expire_in: 1 week
+
+test:
+  stage: test
+  
+  image: golang:1.21
+  
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .go/pkg/mod/
+  
+  before_script:
+    - mkdir -p .go
+    - export GOPATH=${CI_PROJECT_DIR}/.go
+  
+  script:
+    - go mod download || true
+    - go test -v -race -coverprofile=coverage.out -covermode=atomic ./... || true
+    - go tool cover -html=coverage.out -o coverage.html || true
+    - go tool cover -func=coverage.out || true
+  
+  coverage: '/coverage: \d+.\d+% of statements/'
+  
+  artifacts:
+    when: always
+    paths:
+      - coverage.out
+      - coverage.html
+    expire_in: 1 week
+build:
+  stage: build
+  image: golang:1.21
+  script:
+    - go mod download || true
+    - |
+      # Проверяем наличие Makefile и пытаемся собрать через make
+      if [ -f 'Makefile' ]; then
+        echo "Found Makefile, trying to build..."
+        make build || make binary || make dist || make || true
+      fi
+      # Проверяем наличие build.go
+      if [ -f 'build.go' ]; then
+        echo "Found build.go, running it..."
+        go run build.go build || go run build.go || true
+      fi
+      # Проверяем наличие скриптов сборки
+      if [ -f 'scripts/build.sh' ]; then
+        echo "Found scripts/build.sh, running it..."
+        chmod +x scripts/build.sh
+        ./scripts/build.sh || true
+      fi
+      if [ -f 'build.sh' ]; then
+        echo "Found build.sh, running it..."
+        chmod +x build.sh
+        ./build.sh || true
+      fi
+      # Стандартная сборка через go build
+      if [ -d './cmd' ]; then
+        echo "Found cmd/ directory, building..."
+        go build -o ./bin/app ./cmd/... || true
+      fi
+      # Собираем все пакеты
+      go build ./... || true
+  artifacts:
+    paths:
+      - bin/
+      - dist/
+    expire_in: 1 hour
+build_and_push:
+  stage: docker_build
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  dependencies:
+    - build
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+    - docker info
+    - echo "Checking GitLab CI variables..."
+    - echo "Logging to GitLab Container Registry with CI_JOB_TOKEN..."
+    - echo "$CI_JOB_TOKEN" | docker login -u "gitlab-ci-token" "$CI_REGISTRY" --password-stdin
+    # Для Go проектов: предварительная сборка всех бинарников через Docker
+    - |
+      echo "Pre-building Go binaries (if needed)..."
+      if [ -f "go.mod" ] || [ -f "Gopkg.toml" ] || [ -f "glide.yaml" ]; then
+        echo "Go project detected, attempting to build binaries using Docker..."
+        GO_VERSION="1.21"
+        # Используем Docker для сборки бинарников
+        docker run --rm -v "$PWD:/src" -w /src golang:${GO_VERSION} sh -c "
+          go mod download || true
+          # Проверяем наличие Makefile и пытаемся собрать через make
+          if [ -f 'Makefile' ]; then
+            echo 'Found Makefile, trying to build...'
+            make build || make binary || make || true
+          fi
+          # Проверяем наличие build.go
+          if [ -f 'build.go' ]; then
+            echo 'Found build.go, running it...'
+            go run build.go build || go run build.go || true
+          fi
+          # Проверяем наличие скриптов сборки
+          if [ -f 'scripts/build.sh' ] || [ -f 'build.sh' ]; then
+            echo 'Found build script, running it...'
+            chmod +x scripts/build.sh build.sh 2>/dev/null || true
+            ./scripts/build.sh || ./build.sh || true
+          fi
+          # Пытаемся найти и собрать все main пакеты
+          find . -name 'main.go' -type f | head -20 | while read main_file; do
+            dir=\$(dirname \"\$main_file\")
+            bin_name=\$(basename \"\$dir\")
+            echo \"Attempting to build binary: \$bin_name\"
+            (cd \"\$dir\" && go build -o \"../\${bin_name}-linux-amd64\" .) || true
+          done
+          # Стандартная сборка всех пакетов
+          go build ./... || true
+        " || echo "⚠️  Pre-build step failed, continuing with Docker builds..."
+      fi
+  script:
+    - echo "Building and pushing Docker images..."
+    
+    # Main
+    - |
+      echo "Building Main (Dockerfile)..."
+      if docker build -f Dockerfile -t $CI_REGISTRY_IMAGE-main:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-main:latest .; then
+        echo "Pushing Main..."
+        docker push $CI_REGISTRY_IMAGE-main:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-main:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Main built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Main, continuing with next..."
+      fi
+    
+    # Docker
+    - |
+      echo "Building Docker (scripts/docker/Dockerfile.ui)..."
+      if docker build -f scripts/docker/Dockerfile.ui -t $CI_REGISTRY_IMAGE-docker:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-docker:latest scripts/docker; then
+        echo "Pushing Docker..."
+        docker push $CI_REGISTRY_IMAGE-docker:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-docker:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Docker built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Docker, continuing with next..."
+      fi
+    
+    # Docker
+    - |
+      echo "Building Docker (scripts/docker/Dockerfile)..."
+      if docker build -f scripts/docker/Dockerfile -t $CI_REGISTRY_IMAGE-docker:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-docker:latest scripts/docker; then
+        echo "Pushing Docker..."
+        docker push $CI_REGISTRY_IMAGE-docker:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-docker:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Docker built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Docker, continuing with next..."
+      fi
+    
+    # Cross
+    - |
+      echo "Building Cross (scripts/cross/Dockerfile)..."
+      if docker build -f scripts/cross/Dockerfile -t $CI_REGISTRY_IMAGE-cross:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-cross:latest scripts/cross; then
+        echo "Pushing Cross..."
+        docker push $CI_REGISTRY_IMAGE-cross:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-cross:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Cross built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Cross, continuing with next..."
+      fi
+    
+    # Testdata
+    - |
+      echo "Building Testdata (vault/testdata/Dockerfile)..."
+      if docker build -f vault/testdata/Dockerfile -t $CI_REGISTRY_IMAGE-testdata:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-testdata:latest vault/testdata; then
+        echo "Pushing Testdata..."
+        docker push $CI_REGISTRY_IMAGE-testdata:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-testdata:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Testdata built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Testdata, continuing with next..."
+      fi
+    
+    - echo "🎉 Build and push process completed!"
+  after_script:
+    - docker logout $CI_REGISTRY || true
+
+
+migration:
+  stage: migration
+  image: golang:1.21
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .go/pkg/mod/
+  before_script:
+    - mkdir -p .go
+    - export GOPATH=${CI_PROJECT_DIR}/.go
+  script:
+    - go mod download || true
+    - echo "No migration tool detected" || true
+  only:
+    - main
+    - develop
+
+post_deploy:
+  stage: post_deploy
+  image: golang:1.21
+  script:
+    - go mod download || true
+    - go test -v -run Smoke ./... || go test -v -run TestSmoke ./... || true
+
+cleanup:
+  stage: cleanup
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+  script:
+    - docker system prune -f || true

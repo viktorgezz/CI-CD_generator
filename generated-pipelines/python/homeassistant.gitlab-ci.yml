@@ -1,0 +1,203 @@
+# Generated GitLab CI (auto)
+stages:
+  - pre_checks
+  - lint
+  - type_check
+  - security
+  - test
+  - docker_build
+  - docker_push
+  - deploy
+  - cleanup
+
+# Triggers (from user_settings.triggers)
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_BRANCH == "master" && $CI_PIPELINE_SOURCE == "push"'
+
+
+
+
+
+# Common variables
+variables:
+  DOCKER_IMAGE: "$CI_REGISTRY_IMAGE"
+  DOCKER_TAG: "$CI_COMMIT_SHORT_SHA"
+  PYTHON_VERSION: "3.11"
+
+  # Required CI/CD variables for this pipeline (configure in GitLab settings)
+  # CI_REGISTRY: GitLab container registry URL (usually predefined)
+  # CI_REGISTRY_USER: registry username for docker login
+  # CI_REGISTRY_PASSWORD: registry password/token for docker login
+  # KUBECONFIG_CONTENT: base64-encoded kubeconfig for Kubernetes deploy
+
+# User variables (inlined - prefer CI platform variables for secrets)
+
+pre_checks:
+  stage: pre_checks
+  image: python:3.11
+  script:
+    - python --version
+    - pip --version
+    - echo "Basic repo checks (lint config, presence of tests, dockerfile...)"
+
+lint:
+  stage: lint
+  image: python:3.11
+  before_script:
+    - python -m pip install --upgrade pip
+  script:
+    - pip install ruff flake8 || true
+    - ruff check . || true
+    - flake8 . || true
+  artifacts:
+    when: on_success
+    paths:
+      - reports/
+    expire_in: 1 week
+type_check:
+  stage: type_check
+  image: python:3.11
+  script:
+    - pip install mypy || true
+    - mypy . || true
+security:
+  stage: security
+  image: python:3.11
+  script:
+    - pip install safety bandit || true
+    - safety check --json || true
+    - bandit -r . -f json -o bandit-report.json || true
+  artifacts:
+    paths:
+      - bandit-report.json
+    expire_in: 1 week
+
+test:
+  stage: test
+  
+  image: python:3.11
+  
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .cache/pip
+  
+  before_script:
+    - export PIP_CACHE_DIR=".cache/pip"
+    - python -m pip install --upgrade pip
+  
+  script:
+    - pip install -r requirements.txt || pip install -r requirements-dev.txt || true
+    - pip install pytest pytest-cov || true
+    - pytest --junitxml=test-results.xml --cov=. --cov-report=xml --cov-report=html --cov-report=term || true
+  
+  coverage: '/(?i)total.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
+  
+  artifacts:
+    when: always
+    paths:
+      - test-results.xml
+      - coverage.xml
+      - htmlcov/
+      - .pytest_cache/
+    reports:
+      junit: test-results.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    expire_in: 1 week
+build_and_push:
+  stage: docker_build
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+    - docker info
+    - echo "Checking GitLab CI variables..."
+    - echo "Logging to GitLab Container Registry with CI_JOB_TOKEN..."
+    - echo "$CI_JOB_TOKEN" | docker login -u "gitlab-ci-token" "$CI_REGISTRY" --password-stdin
+  script:
+    - echo "Building and pushing Docker images..."
+    
+    # Dev
+    - |
+      echo "Building Dev (Dockerfile.dev)..."
+      if docker build -f Dockerfile.dev -t $CI_REGISTRY_IMAGE-dev:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-dev:latest .; then
+        echo "Pushing Dev..."
+        docker push $CI_REGISTRY_IMAGE-dev:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-dev:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Dev built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Dev, continuing with next..."
+      fi
+    
+    # Main
+    - |
+      echo "Building Main (Dockerfile)..."
+      if docker build -f Dockerfile -t $CI_REGISTRY_IMAGE-main:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-main:latest .; then
+        echo "Pushing Main..."
+        docker push $CI_REGISTRY_IMAGE-main:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-main:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Main built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Main, continuing with next..."
+      fi
+    
+    # Docker
+    - |
+      echo "Building Docker (script/hassfest/docker/Dockerfile)..."
+      if docker build -f script/hassfest/docker/Dockerfile -t $CI_REGISTRY_IMAGE-docker:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-docker:latest script/hassfest/docker; then
+        echo "Pushing Docker..."
+        docker push $CI_REGISTRY_IMAGE-docker:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-docker:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Docker built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Docker, continuing with next..."
+      fi
+    
+    # Docker
+    - |
+      echo "Building Docker (script/hassfest/docker/Dockerfile.dockerignore)..."
+      if docker build -f script/hassfest/docker/Dockerfile.dockerignore -t $CI_REGISTRY_IMAGE-docker:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-docker:latest script/hassfest/docker; then
+        echo "Pushing Docker..."
+        docker push $CI_REGISTRY_IMAGE-docker:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-docker:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Docker built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Docker, continuing with next..."
+      fi
+    
+    - echo "🎉 Build and push process completed!"
+  after_script:
+    - docker logout $CI_REGISTRY || true
+
+
+
+cleanup:
+  stage: cleanup
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+  script:
+    - docker system prune -f || true

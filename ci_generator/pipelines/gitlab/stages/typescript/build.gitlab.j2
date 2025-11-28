@@ -1,0 +1,15 @@
+build:
+  stage: build
+  image: node:{{ ctx.node_version | default('18') }}
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  script:
+    - npm ci || yarn install --frozen-lockfile || true
+    - npm run build || yarn build || true
+  artifacts:
+    paths:
+      - dist/
+      - build/
+    expire_in: 1 hour

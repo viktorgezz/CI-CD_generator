@@ -1,0 +1,29 @@
+{% set dockerfile_paths = ctx.dockerfile_paths or (ctx.dockerfile_path and [ctx.dockerfile_path] or []) %}
+{% set is_single_dockerfile = dockerfile_paths|length == 1 %}
+{% set single_dockerfile_in_root = is_single_dockerfile and (dockerfile_paths[0] == "Dockerfile" or "/" not in dockerfile_paths[0]) %}
+{% if dockerfile_paths|length > 0 and not single_dockerfile_in_root %}
+{# Несколько Dockerfile - push уже выполнен в build_and_push, ничего не делаем #}
+{% else %}
+{# Один Dockerfile в корне - используем стандартные переменные #}
+docker_push:
+  stage: docker_push
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  dependencies:
+    - docker_build
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+  script:
+    - docker load -i image.tar || true
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" $CI_REGISTRY --password-stdin
+    - docker push $DOCKER_IMAGE:$DOCKER_TAG
+{% endif %}

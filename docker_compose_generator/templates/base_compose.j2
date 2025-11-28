@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+{% for service_name, service_config in services.items() %}
+{% set service_name = service_name %}
+{% set template_name = service_config.template %}
+{% include 'services/' + template_name + '.j2' %}
+{% endfor %}
+
+{% if networks %}
+networks:
+{% for net_name, net_config in networks.items() %}
+  {{ net_name }}:
+    {% if net_config.driver %}
+    driver: {{ net_config.driver }}
+    {% endif %}
+{% endfor %}
+{% endif %}
+
+{% if volumes %}
+volumes:
+{% for vol_name, vol_config in volumes.items() %}
+  {{ vol_name }}:
+    {% if vol_config.driver %}
+    driver: {{ vol_config.driver }}
+    {% endif %}
+{% endfor %}
+{% endif %}
+

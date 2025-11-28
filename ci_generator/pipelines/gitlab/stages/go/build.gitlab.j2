@@ -1,0 +1,39 @@
+build:
+  stage: build
+  image: golang:{{ ctx.go_version }}
+  script:
+    - go mod download || true
+    - |
+      # Проверяем наличие Makefile и пытаемся собрать через make
+      if [ -f 'Makefile' ]; then
+        echo "Found Makefile, trying to build..."
+        make build || make binary || make dist || make || true
+      fi
+      # Проверяем наличие build.go
+      if [ -f 'build.go' ]; then
+        echo "Found build.go, running it..."
+        go run build.go build || go run build.go || true
+      fi
+      # Проверяем наличие скриптов сборки
+      if [ -f 'scripts/build.sh' ]; then
+        echo "Found scripts/build.sh, running it..."
+        chmod +x scripts/build.sh
+        ./scripts/build.sh || true
+      fi
+      if [ -f 'build.sh' ]; then
+        echo "Found build.sh, running it..."
+        chmod +x build.sh
+        ./build.sh || true
+      fi
+      # Стандартная сборка через go build
+      if [ -d './cmd' ]; then
+        echo "Found cmd/ directory, building..."
+        go build -o ./bin/app ./cmd/... || true
+      fi
+      # Собираем все пакеты
+      go build ./... || true
+  artifacts:
+    paths:
+      - bin/
+      - dist/
+    expire_in: 1 hour

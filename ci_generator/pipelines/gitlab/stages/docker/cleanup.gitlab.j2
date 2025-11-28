@@ -1,0 +1,17 @@
+cleanup:
+  stage: cleanup
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+  script:
+    - docker system prune -f || true

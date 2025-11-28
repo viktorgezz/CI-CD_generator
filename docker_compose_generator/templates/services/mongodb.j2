@@ -1,0 +1,33 @@
+  mongodb:
+    image: mongo:{{ service_config.version }}
+    environment:
+      {% if service_config.user and service_config.password %}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-{{ service_config.user }}}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-{{ service_config.password }}}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE:-{{ service_config.db_name }}}
+      {% endif %}
+    {% if service_config.volumes %}
+    volumes:
+      {% for vol in service_config.volumes %}
+      - {{ vol }}
+      {% endfor %}
+    {% endif %}
+    {% if service_config.ports %}
+    ports:
+      {% for port in service_config.ports %}
+      - "${MONGO_PORT:-{{ port }}}"
+      {% endfor %}
+    {% endif %}
+    {% if service_config.networks %}
+    networks:
+      {% for net in service_config.networks %}
+      - {{ net }}
+      {% endfor %}
+    {% endif %}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+

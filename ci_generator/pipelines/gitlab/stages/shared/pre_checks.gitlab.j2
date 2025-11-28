@@ -1,0 +1,36 @@
+pre_checks:
+  stage: pre_checks
+  {# Определяем image в зависимости от языка #}
+  {% if ctx.language == 'python' %}
+  image: python:{{ ctx.python_version | default('3.11') }}
+  script:
+    - python --version
+    - pip --version
+    - echo "Basic repo checks (lint config, presence of tests, dockerfile...)"
+  {% elif ctx.language in ['typescript', 'javascript'] %}
+  image: node:{{ ctx.node_version | default('18') }}
+  script:
+    - node --version
+    - npm --version || yarn --version || true
+    - echo "Basic repo checks (lint config, presence of tests, dockerfile...)"
+  {% elif ctx.language in ['go', 'golang'] %}
+  image: golang:{{ ctx.go_version | default('1.21') }}
+  script:
+    - go version
+    - echo "Basic repo checks (lint config, presence of tests, dockerfile...)"
+  {% elif ctx.language in ['java', 'kotlin'] %}
+  image: {{ ctx.build_image | default('maven:3.9-eclipse-temurin-17') }}
+  script:
+    {% if ctx.build_tool == 'maven' %}
+    - mvn --version
+    {% elif ctx.build_tool == 'gradle' %}
+    - ./gradlew --version || gradle --version || true
+    {% else %}
+    - echo "Java/Kotlin project detected"
+    {% endif %}
+    - echo "Basic repo checks (lint config, presence of tests, dockerfile...)"
+  {% else %}
+  image: alpine:latest
+  script:
+    - echo "Basic repo checks (lint config, presence of tests, dockerfile...)"
+  {% endif %}

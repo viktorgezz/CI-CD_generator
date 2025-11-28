@@ -1,0 +1,56 @@
+# Generated GitLab CI (auto)
+stages:
+{% for s in stages %}  - {{ s }}
+{% endfor %}
+
+# Triggers (from user_settings.triggers)
+{% set tr = ctx.triggers or {} %}
+workflow:
+  rules:
+    {# on_push: список веток #}
+    {% for branch in tr.on_push or [] %}
+    - if: '$CI_COMMIT_BRANCH == "{{ branch }}" && $CI_PIPELINE_SOURCE == "push"'
+    {% endfor %}
+
+    {# on_merge_request: true/false #}
+    {% if tr.on_merge_request %}
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    {% endif %}
+
+    {# on_tags: строка-паттерн (если непустая) #}
+    {% if tr.on_tags %}
+    - if: '$CI_COMMIT_TAG =~ /{{ tr.on_tags }}/ && $CI_PIPELINE_SOURCE == "push"'
+    {% endif %}
+
+    {# schedule: если указано, включаем запуск по расписанию #}
+    {% if tr.schedule %}
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    {% endif %}
+
+    {# manual: если true, разрешаем ручной запуск пайплайна #}
+    {% if tr.manual %}
+    - when: manual
+    {% endif %}
+
+# Common variables
+variables:
+  DOCKER_IMAGE: "$CI_REGISTRY_IMAGE"
+  DOCKER_TAG: "{{ ctx.tag }}"
+{% if ctx.python_version %}  PYTHON_VERSION: "{{ ctx.python_version }}"
+{% endif %}{% if ctx.java_version %}  JAVA_VERSION: "{{ ctx.java_version }}"
+{% endif %}{% if ctx.go_version %}  GO_VERSION: "{{ ctx.go_version }}"
+{% endif %}{% if ctx.node_version %}  NODE_VERSION: "{{ ctx.node_version }}"
+{% endif %}{% if ctx.build_tool %}  BUILD_TOOL: "{{ ctx.build_tool }}"
+{% endif %}
+
+  # Required CI/CD variables for this pipeline (configure in GitLab settings)
+  # CI_REGISTRY: GitLab container registry URL (usually predefined)
+  # CI_REGISTRY_USER: registry username for docker login
+  # CI_REGISTRY_PASSWORD: registry password/token for docker login
+  # KUBECONFIG_CONTENT: base64-encoded kubeconfig for Kubernetes deploy
+
+# User variables (inlined - prefer CI platform variables for secrets)
+{% for k, v in ctx.variables.items() %}
+  {{ k }}: "{{ v }}"
+{% endfor %}
+

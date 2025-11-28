@@ -1,0 +1,25 @@
+migration:
+  stage: migration
+  image: python:{{ ctx.python_version }}
+  script:
+    - pip install -r requirements.txt || true
+    {# Собираем список фреймворков из анализа #}
+    {% set frameworks = (ctx.analysis.frameworks or []) | map('lower') | list %}
+    {% set backend_frameworks = (ctx.analysis.backend_frameworks or []) | map('lower') | list %}
+    {% set all_fw = (frameworks + backend_frameworks) | unique | list %}
+    {# Django — стандартные manage.py migrate #}
+    {% if 'django' in all_fw %}
+    - pip install django || true
+    - python manage.py migrate || true
+    {# FastAPI — считаем, что используются Alembic миграции #}
+    {% elif 'fastapi' in all_fw %}
+    - pip install alembic || true
+    - alembic upgrade head || true
+    {# Flask — пример с Flask-Migrate #}
+    {% elif 'flask' in all_fw %}
+    - pip install flask-migrate || true
+    - flask db upgrade || true
+    {# Фреймворк есть, но мы его явно не поддерживаем #}
+    {% else %}
+    - echo "No migration commands configured for frameworks: {{ all_fw | join(', ') }}" || true
+    {% endif %}

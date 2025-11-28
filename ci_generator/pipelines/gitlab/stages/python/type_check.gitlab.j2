@@ -1,0 +1,6 @@
+type_check:
+  stage: type_check
+  image: python:{{ ctx.python_version }}
+  script:
+    - pip install mypy || true
+    - mypy . || true

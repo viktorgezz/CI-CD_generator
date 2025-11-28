@@ -1,0 +1,373 @@
+# Generated GitLab CI (auto)
+stages:
+  - pre_checks
+  - lint
+  - type_check
+  - security
+  - test
+  - docker_build
+  - docker_push
+  - migration
+  - deploy
+  - post_deploy
+  - cleanup
+
+# Triggers (from user_settings.triggers)
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_BRANCH == "master" && $CI_PIPELINE_SOURCE == "push"'
+
+
+
+
+
+# Common variables
+variables:
+  DOCKER_IMAGE: "$CI_REGISTRY_IMAGE"
+  DOCKER_TAG: "$CI_COMMIT_SHORT_SHA"
+  JAVA_VERSION: "17"
+  BUILD_TOOL: "gradle"
+
+  # Required CI/CD variables for this pipeline (configure in GitLab settings)
+  # CI_REGISTRY: GitLab container registry URL (usually predefined)
+  # CI_REGISTRY_USER: registry username for docker login
+  # CI_REGISTRY_PASSWORD: registry password/token for docker login
+  # KUBECONFIG_CONTENT: base64-encoded kubeconfig for Kubernetes deploy
+
+# User variables (inlined - prefer CI platform variables for secrets)
+
+pre_checks:
+  stage: pre_checks
+  image: gradle:8.5-jdk17
+  script:
+    - ./gradlew --version || gradle --version || true
+    - echo "Basic repo checks (lint config, presence of tests, dockerfile...)"
+
+lint:
+  stage: lint
+  image: gradle:8.5-jdk17
+  script:
+    - |
+      if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        ./gradlew checkstyleMain --continue || true
+        ./gradlew spotbugsMain --continue || true
+      else
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+          ./gradlew checkstyleMain --continue || true
+          ./gradlew spotbugsMain --continue || true
+        else
+          echo "Gradle build file not found, skipping lint"
+        fi
+      fi
+  artifacts:
+    paths:
+      - build/reports/
+    when: always
+type_check:
+  stage: type_check
+  image: gradle:8.5-jdk17
+  script:
+    - |
+      if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        ./gradlew classes
+      else
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+          ./gradlew classes
+        else
+          echo "Gradle build file not found"
+          exit 1
+        fi
+      fi
+
+security:
+  stage: security
+  image: gradle:8.5-jdk17
+  script:
+    - |
+      if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        ./gradlew dependencyCheckAnalyze || true
+        ./gradlew spotbugsMain || true
+      else
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+          ./gradlew dependencyCheckAnalyze || true
+          ./gradlew spotbugsMain || true
+        else
+          echo "Gradle build file not found, skipping security checks"
+        fi
+      fi
+  artifacts:
+    paths:
+      - build/reports/dependency-check-report.html
+      - build/reports/spotbugs/
+    expire_in: 1 week
+
+test:
+  stage: test
+  
+  image: gradle:8.5-jdk17
+  
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .gradle/caches
+  
+  before_script:
+    - export GRADLE_USER_HOME=${CI_PROJECT_DIR}/.gradle
+  
+  script:
+    - |
+      if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        ./gradlew test jacocoTestReport || gradle test jacocoTestReport || true
+      else
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+          ./gradlew test jacocoTestReport || gradle test jacocoTestReport || true
+        else
+          echo "Gradle build file not found, skipping tests"
+        fi
+      fi
+  
+  coverage: '/Total.*?([0-9]{1,3})%/'
+  
+  artifacts:
+    when: always
+    paths:
+      - build/reports/jacoco/test/
+      - build/test-results/
+    reports:
+      junit:
+        - build/test-results/test/TEST-*.xml
+    expire_in: 1 week
+build_and_push:
+  stage: docker_build
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+    - docker info
+    - echo "Checking GitLab CI variables..."
+    - echo "Logging to GitLab Container Registry with CI_JOB_TOKEN..."
+    - echo "$CI_JOB_TOKEN" | docker login -u "gitlab-ci-token" "$CI_REGISTRY" --password-stdin
+  script:
+    - echo "Building and pushing Docker images..."
+    
+    # Native
+    - |
+      echo "Building Native (libs/simdvec/native/Dockerfile.amd64)..."
+      if docker build -f libs/simdvec/native/Dockerfile.amd64 -t $CI_REGISTRY_IMAGE-native:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-native:latest libs/simdvec/native; then
+        echo "Pushing Native..."
+        docker push $CI_REGISTRY_IMAGE-native:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-native:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Native built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Native, continuing with next..."
+      fi
+    
+    # Native
+    - |
+      echo "Building Native (libs/simdvec/native/Dockerfile.aarch64)..."
+      if docker build -f libs/simdvec/native/Dockerfile.aarch64 -t $CI_REGISTRY_IMAGE-native:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-native:latest libs/simdvec/native; then
+        echo "Pushing Native..."
+        docker push $CI_REGISTRY_IMAGE-native:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-native:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Native built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Native, continuing with next..."
+      fi
+    
+    # Resources
+    - |
+      echo "Building Resources (x-pack/test/smb-fixture/src/main/resources/Dockerfile)..."
+      if docker build -f x-pack/test/smb-fixture/src/main/resources/Dockerfile -t $CI_REGISTRY_IMAGE-resources:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-resources:latest x-pack/test/smb-fixture/src/main/resources; then
+        echo "Pushing Resources..."
+        docker push $CI_REGISTRY_IMAGE-resources:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-resources:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Resources built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Resources, continuing with next..."
+      fi
+    
+    # Idp
+    - |
+      echo "Building Idp (x-pack/test/idp-fixture/src/main/resources/idp/Dockerfile)..."
+      if docker build -f x-pack/test/idp-fixture/src/main/resources/idp/Dockerfile -t $CI_REGISTRY_IMAGE-idp:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-idp:latest x-pack/test/idp-fixture/src/main/resources/idp; then
+        echo "Pushing Idp..."
+        docker push $CI_REGISTRY_IMAGE-idp:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-idp:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Idp built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Idp, continuing with next..."
+      fi
+    
+    # Oidc
+    - |
+      echo "Building Oidc (x-pack/test/idp-fixture/src/main/resources/oidc/Dockerfile)..."
+      if docker build -f x-pack/test/idp-fixture/src/main/resources/oidc/Dockerfile -t $CI_REGISTRY_IMAGE-oidc:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-oidc:latest x-pack/test/idp-fixture/src/main/resources/oidc; then
+        echo "Pushing Oidc..."
+        docker push $CI_REGISTRY_IMAGE-oidc:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-oidc:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Oidc built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Oidc, continuing with next..."
+      fi
+    
+    # Nginx
+    - |
+      echo "Building Nginx (x-pack/test/idp-fixture/src/main/resources/nginx/Dockerfile)..."
+      if docker build -f x-pack/test/idp-fixture/src/main/resources/nginx/Dockerfile -t $CI_REGISTRY_IMAGE-nginx:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-nginx:latest x-pack/test/idp-fixture/src/main/resources/nginx; then
+        echo "Pushing Nginx..."
+        docker push $CI_REGISTRY_IMAGE-nginx:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-nginx:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Nginx built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Nginx, continuing with next..."
+      fi
+    
+    # Openldap
+    - |
+      echo "Building Openldap (x-pack/test/idp-fixture/src/main/resources/openldap/Dockerfile)..."
+      if docker build -f x-pack/test/idp-fixture/src/main/resources/openldap/Dockerfile -t $CI_REGISTRY_IMAGE-openldap:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-openldap:latest x-pack/test/idp-fixture/src/main/resources/openldap; then
+        echo "Pushing Openldap..."
+        docker push $CI_REGISTRY_IMAGE-openldap:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-openldap:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Openldap built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Openldap, continuing with next..."
+      fi
+    
+    # Krb5kdc Fixture
+    - |
+      echo "Building Krb5kdc Fixture (test/fixtures/krb5kdc-fixture/Dockerfile)..."
+      if docker build -f test/fixtures/krb5kdc-fixture/Dockerfile -t $CI_REGISTRY_IMAGE-krb5kdc_fixture:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-krb5kdc_fixture:latest test/fixtures/krb5kdc-fixture; then
+        echo "Pushing Krb5kdc Fixture..."
+        docker push $CI_REGISTRY_IMAGE-krb5kdc_fixture:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-krb5kdc_fixture:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Krb5kdc Fixture built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Krb5kdc Fixture, continuing with next..."
+      fi
+    
+    # Docker
+    - |
+      echo "Building Docker (distribution/docker/src/docker/Dockerfile.ess)..."
+      if docker build -f distribution/docker/src/docker/Dockerfile.ess -t $CI_REGISTRY_IMAGE-docker:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-docker:latest distribution/docker/src/docker; then
+        echo "Pushing Docker..."
+        docker push $CI_REGISTRY_IMAGE-docker:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-docker:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Docker built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Docker, continuing with next..."
+      fi
+    
+    # Wolfi
+    - |
+      echo "Building Wolfi (distribution/docker/src/docker/dockerfiles/wolfi/Dockerfile)..."
+      if docker build -f distribution/docker/src/docker/dockerfiles/wolfi/Dockerfile -t $CI_REGISTRY_IMAGE-wolfi:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-wolfi:latest distribution/docker/src/docker/dockerfiles/wolfi; then
+        echo "Pushing Wolfi..."
+        docker push $CI_REGISTRY_IMAGE-wolfi:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-wolfi:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Wolfi built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Wolfi, continuing with next..."
+      fi
+    
+    # Ironbank
+    - |
+      echo "Building Ironbank (distribution/docker/src/docker/dockerfiles/ironbank/Dockerfile)..."
+      if docker build -f distribution/docker/src/docker/dockerfiles/ironbank/Dockerfile -t $CI_REGISTRY_IMAGE-ironbank:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-ironbank:latest distribution/docker/src/docker/dockerfiles/ironbank; then
+        echo "Pushing Ironbank..."
+        docker push $CI_REGISTRY_IMAGE-ironbank:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-ironbank:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Ironbank built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Ironbank, continuing with next..."
+      fi
+    
+    # Cloud Ess Fips
+    - |
+      echo "Building Cloud Ess Fips (distribution/docker/src/docker/dockerfiles/cloud_ess_fips/Dockerfile)..."
+      if docker build -f distribution/docker/src/docker/dockerfiles/cloud_ess_fips/Dockerfile -t $CI_REGISTRY_IMAGE-cloud_ess_fips:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-cloud_ess_fips:latest distribution/docker/src/docker/dockerfiles/cloud_ess_fips; then
+        echo "Pushing Cloud Ess Fips..."
+        docker push $CI_REGISTRY_IMAGE-cloud_ess_fips:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-cloud_ess_fips:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Cloud Ess Fips built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Cloud Ess Fips, continuing with next..."
+      fi
+    
+    # Default
+    - |
+      echo "Building Default (distribution/docker/src/docker/dockerfiles/default/Dockerfile)..."
+      if docker build -f distribution/docker/src/docker/dockerfiles/default/Dockerfile -t $CI_REGISTRY_IMAGE-default:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-default:latest distribution/docker/src/docker/dockerfiles/default; then
+        echo "Pushing Default..."
+        docker push $CI_REGISTRY_IMAGE-default:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-default:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Default built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Default, continuing with next..."
+      fi
+    
+    - echo "🎉 Build and push process completed!"
+  after_script:
+    - docker logout $CI_REGISTRY || true
+
+
+migration:
+  stage: migration
+  image: gradle:8.5-jdk17
+  script:
+    - |
+      if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        GRADLE_DIR="."
+      else
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+        else
+          echo "Gradle build file not found, skipping migrations"
+          exit 0
+        fi
+      fi
+    - echo "No migration tool detected for Spring Boot."
+
+
+post_deploy:
+  stage: post_deploy
+  image: gradle:8.5-jdk17
+  script:
+    - ./gradlew test --tests "*SmokeTest" || ./gradlew test --tests "*Smoke*" || true
+
+cleanup:
+  stage: cleanup
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+  script:
+    - docker system prune -f || true

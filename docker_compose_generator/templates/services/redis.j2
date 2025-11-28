@@ -1,0 +1,21 @@
+  redis:
+    image: redis:{{ service_config.version }}
+    {% if service_config.ports %}
+    ports:
+      {% for port in service_config.ports %}
+      - "${REDIS_PORT:-{{ port }}}"
+      {% endfor %}
+    {% endif %}
+    {% if service_config.networks %}
+    networks:
+      {% for net in service_config.networks %}
+      - {{ net }}
+      {% endfor %}
+    {% endif %}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+

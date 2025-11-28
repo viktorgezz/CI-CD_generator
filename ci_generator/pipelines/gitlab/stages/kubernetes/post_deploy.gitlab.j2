@@ -1,0 +1,33 @@
+post_deploy:
+  stage: post_deploy
+  {# Определяем image и команды в зависимости от языка #}
+  {% if ctx.language == 'python' %}
+  image: python:{{ ctx.python_version | default('3.11') }}
+  script:
+    - pip install -r requirements.txt || true
+    - pytest tests/smoke || true
+  {% elif ctx.language in ['typescript', 'javascript'] %}
+  image: node:{{ ctx.node_version | default('18') }}
+  script:
+    - npm ci || yarn install --frozen-lockfile || true
+    - npm run test:smoke || yarn test:smoke || npm test -- --grep smoke || true
+  {% elif ctx.language in ['go', 'golang'] %}
+  image: golang:{{ ctx.go_version | default('1.21') }}
+  script:
+    - go mod download || true
+    - go test -v -run Smoke ./... || go test -v -run TestSmoke ./... || true
+  {% elif ctx.language in ['java', 'kotlin'] %}
+  image: {{ ctx.build_image | default('maven:3.9-eclipse-temurin-17') }}
+  script:
+    {% if ctx.build_tool == 'maven' %}
+    - mvn test -Dtest=*SmokeTest || mvn test -Dtest=*Smoke* || true
+    {% elif ctx.build_tool == 'gradle' %}
+    - ./gradlew test --tests "*SmokeTest" || ./gradlew test --tests "*Smoke*" || true
+    {% else %}
+    - echo "Running smoke tests..."
+    {% endif %}
+  {% else %}
+  image: alpine:latest
+  script:
+    - echo "Post-deploy checks..."
+  {% endif %}

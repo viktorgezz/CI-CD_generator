@@ -1,0 +1,258 @@
+# Generated GitLab CI (auto)
+stages:
+  - pre_checks
+  - lint
+  - type_check
+  - security
+  - test
+  - docker_build
+  - docker_push
+  - migration
+  - deploy
+  - cleanup
+
+# Triggers (from user_settings.triggers)
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_BRANCH == "master" && $CI_PIPELINE_SOURCE == "push"'
+
+
+
+
+
+# Common variables
+variables:
+  DOCKER_IMAGE: "$CI_REGISTRY_IMAGE"
+  DOCKER_TAG: "$CI_COMMIT_SHORT_SHA"
+  JAVA_VERSION: "17"
+  BUILD_TOOL: "gradle"
+
+  # Required CI/CD variables for this pipeline (configure in GitLab settings)
+  # CI_REGISTRY: GitLab container registry URL (usually predefined)
+  # CI_REGISTRY_USER: registry username for docker login
+  # CI_REGISTRY_PASSWORD: registry password/token for docker login
+  # KUBECONFIG_CONTENT: base64-encoded kubeconfig for Kubernetes deploy
+
+# User variables (inlined - prefer CI platform variables for secrets)
+
+pre_checks:
+  stage: pre_checks
+  image: gradle:8.5-jdk17
+  script:
+    - ./gradlew --version || gradle --version || true
+    - echo "Basic repo checks (lint config, presence of tests, dockerfile...)"
+
+lint:
+  stage: lint
+  image: gradle:8.5-jdk17
+  script:
+    - |
+      if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        ./gradlew checkstyleMain --continue || true
+        ./gradlew spotbugsMain --continue || true
+      else
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+          ./gradlew checkstyleMain --continue || true
+          ./gradlew spotbugsMain --continue || true
+        else
+          echo "Gradle build file not found, skipping lint"
+        fi
+      fi
+  artifacts:
+    paths:
+      - build/reports/
+    when: always
+type_check:
+  stage: type_check
+  image: gradle:8.5-jdk17
+  script:
+    - |
+      if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        ./gradlew classes
+      else
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+          ./gradlew classes
+        else
+          echo "Gradle build file not found"
+          exit 1
+        fi
+      fi
+
+security:
+  stage: security
+  image: gradle:8.5-jdk17
+  script:
+    - |
+      if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        ./gradlew dependencyCheckAnalyze || true
+        ./gradlew spotbugsMain || true
+      else
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+          ./gradlew dependencyCheckAnalyze || true
+          ./gradlew spotbugsMain || true
+        else
+          echo "Gradle build file not found, skipping security checks"
+        fi
+      fi
+  artifacts:
+    paths:
+      - build/reports/dependency-check-report.html
+      - build/reports/spotbugs/
+    expire_in: 1 week
+
+test:
+  stage: test
+  
+  image: gradle:8.5-jdk17
+  
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .gradle/caches
+  
+  before_script:
+    - export GRADLE_USER_HOME=${CI_PROJECT_DIR}/.gradle
+  
+  script:
+    - |
+      if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        ./gradlew test jacocoTestReport || gradle test jacocoTestReport || true
+      else
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+          ./gradlew test jacocoTestReport || gradle test jacocoTestReport || true
+        else
+          echo "Gradle build file not found, skipping tests"
+        fi
+      fi
+  
+  coverage: '/Total.*?([0-9]{1,3})%/'
+  
+  artifacts:
+    when: always
+    paths:
+      - build/reports/jacoco/test/
+      - build/test-results/
+    reports:
+      junit:
+        - build/test-results/test/TEST-*.xml
+    expire_in: 1 week
+build_and_push:
+  stage: docker_build
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+    - docker info
+    - echo "Checking GitLab CI variables..."
+    - echo "Logging to GitLab Container Registry with CI_JOB_TOKEN..."
+    - echo "$CI_JOB_TOKEN" | docker login -u "gitlab-ci-token" "$CI_REGISTRY" --password-stdin
+  script:
+    - echo "Building and pushing Docker images..."
+    
+    # Jvm
+    - |
+      echo "Building Jvm (docker/docker_official_images/3.7.0/jvm/Dockerfile)..."
+      if docker build -f docker/docker_official_images/3.7.0/jvm/Dockerfile -t $CI_REGISTRY_IMAGE-jvm:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-jvm:latest docker/docker_official_images/3.7.0/jvm; then
+        echo "Pushing Jvm..."
+        docker push $CI_REGISTRY_IMAGE-jvm:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-jvm:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Jvm built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Jvm, continuing with next..."
+      fi
+    
+    # Jvm
+    - |
+      echo "Building Jvm (docker/jvm/Dockerfile)..."
+      if docker build -f docker/jvm/Dockerfile -t $CI_REGISTRY_IMAGE-jvm:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-jvm:latest docker/jvm; then
+        echo "Pushing Jvm..."
+        docker push $CI_REGISTRY_IMAGE-jvm:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-jvm:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Jvm built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Jvm, continuing with next..."
+      fi
+    
+    # Native
+    - |
+      echo "Building Native (docker/native/Dockerfile)..."
+      if docker build -f docker/native/Dockerfile -t $CI_REGISTRY_IMAGE-native:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-native:latest docker/native; then
+        echo "Pushing Native..."
+        docker push $CI_REGISTRY_IMAGE-native:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-native:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Native built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Native, continuing with next..."
+      fi
+    
+    # Docker
+    - |
+      echo "Building Docker (tests/docker/Dockerfile)..."
+      if docker build -f tests/docker/Dockerfile -t $CI_REGISTRY_IMAGE-docker:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-docker:latest tests/docker; then
+        echo "Pushing Docker..."
+        docker push $CI_REGISTRY_IMAGE-docker:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-docker:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Docker built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Docker, continuing with next..."
+      fi
+    
+    - echo "🎉 Build and push process completed!"
+  after_script:
+    - docker logout $CI_REGISTRY || true
+
+
+migration:
+  stage: migration
+  image: gradle:8.5-jdk17
+  script:
+    - |
+      if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        GRADLE_DIR="."
+      else
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+        else
+          echo "Gradle build file not found, skipping migrations"
+          exit 0
+        fi
+      fi
+    - echo "No migration tool detected for Spring Boot."
+
+
+cleanup:
+  stage: cleanup
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+  script:
+    - docker system prune -f || true

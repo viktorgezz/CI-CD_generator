@@ -1,0 +1,36 @@
+type_check:
+  stage: type_check
+  image: {% if ctx.build_tool == 'maven' %}maven:3.9-eclipse-temurin-{{ ctx.java_version | default('17') }}{% else %}gradle:8.5-jdk{{ ctx.java_version | default('17') }}{% endif %}
+
+  script:
+    {% if ctx.build_tool == 'maven' %}
+    - |
+      # Находим директорию с pom.xml
+      if [ -f "pom.xml" ]; then
+        mvn compile
+      else
+        # Ищем pom.xml в поддиректориях
+        POM_DIR=$(find . -name "pom.xml" -type f | head -1 | xargs dirname)
+        if [ -n "$POM_DIR" ]; then
+          cd "$POM_DIR"
+          mvn compile
+        else
+          echo "POM file not found"
+          exit 1
+        fi
+      fi
+    {% elif ctx.build_tool == 'gradle' %}
+    - |
+      if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        ./gradlew classes
+      else
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+          ./gradlew classes
+        else
+          echo "Gradle build file not found"
+          exit 1
+        fi
+      fi
+    {% endif %}

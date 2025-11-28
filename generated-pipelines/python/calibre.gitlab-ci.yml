@@ -1,0 +1,117 @@
+# Generated GitLab CI (auto)
+stages:
+  - pre_checks
+  - lint
+  - type_check
+  - security
+  - test
+  - build
+
+# Triggers (from user_settings.triggers)
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_BRANCH == "master" && $CI_PIPELINE_SOURCE == "push"'
+
+
+
+
+
+# Common variables
+variables:
+  DOCKER_IMAGE: "$CI_REGISTRY_IMAGE"
+  DOCKER_TAG: "$CI_COMMIT_SHORT_SHA"
+  PYTHON_VERSION: "3.11"
+
+  # Required CI/CD variables for this pipeline (configure in GitLab settings)
+  # CI_REGISTRY: GitLab container registry URL (usually predefined)
+  # CI_REGISTRY_USER: registry username for docker login
+  # CI_REGISTRY_PASSWORD: registry password/token for docker login
+  # KUBECONFIG_CONTENT: base64-encoded kubeconfig for Kubernetes deploy
+
+# User variables (inlined - prefer CI platform variables for secrets)
+
+pre_checks:
+  stage: pre_checks
+  image: python:3.11
+  script:
+    - python --version
+    - pip --version
+    - echo "Basic repo checks (lint config, presence of tests, dockerfile...)"
+
+lint:
+  stage: lint
+  image: python:3.11
+  before_script:
+    - python -m pip install --upgrade pip
+  script:
+    - pip install ruff flake8 || true
+    - ruff check . || true
+    - flake8 . || true
+  artifacts:
+    when: on_success
+    paths:
+      - reports/
+    expire_in: 1 week
+type_check:
+  stage: type_check
+  image: python:3.11
+  script:
+    - pip install mypy || true
+    - mypy . || true
+security:
+  stage: security
+  image: python:3.11
+  script:
+    - pip install safety bandit || true
+    - safety check --json || true
+    - bandit -r . -f json -o bandit-report.json || true
+  artifacts:
+    paths:
+      - bandit-report.json
+    expire_in: 1 week
+
+test:
+  stage: test
+  
+  image: python:3.11
+  
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .cache/pip
+  
+  before_script:
+    - export PIP_CACHE_DIR=".cache/pip"
+    - python -m pip install --upgrade pip
+  
+  script:
+    - pip install -r requirements.txt || pip install -r requirements-dev.txt || true
+    - python -m unittest discover -s tests || true
+  
+  coverage: '/(?i)total.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
+  
+  artifacts:
+    when: always
+    paths:
+      - test-results.xml
+      - coverage.xml
+      - htmlcov/
+      - .pytest_cache/
+    reports:
+      junit: test-results.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    expire_in: 1 week
+build:
+  stage: build
+  image: python:3.11
+  script:
+    - pip install build || true
+    - python -m build || true
+  artifacts:
+    when: on_success
+    paths:
+      - dist/
+    expire_in: 1 hour

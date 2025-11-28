@@ -1,0 +1,38 @@
+migration:
+  stage: migration
+  image: node:{{ ctx.node_version | default('18') }}
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  before_script:
+    - npm ci || yarn install --frozen-lockfile || true
+  script:
+    {% set frameworks = (ctx.analysis.frameworks or []) | map('lower') | list %}
+    {% set backend_frameworks = (ctx.analysis.backend_frameworks or []) | map('lower') | list %}
+    {% set all_fw = frameworks + backend_frameworks %}
+    {% if 'nest' in all_fw %}
+    - echo "Running migrations for NestJS..."
+    - npm run migration:run || yarn migration:run || true
+    {% elif 'express' in all_fw %}
+    - echo "Running migrations for Express..."
+    {% set migration_tools = (ctx.analysis.migration_tools or []) | map('lower') | list %}
+    {% if 'typeorm' in migration_tools %}
+    - npm run typeorm migration:run || yarn typeorm migration:run || true
+    {% elif 'sequelize' in migration_tools %}
+    - npm run sequelize db:migrate || yarn sequelize db:migrate || true
+    {% elif 'knex' in migration_tools %}
+    - npm run knex migrate:latest || yarn knex migrate:latest || true
+    {% else %}
+    - echo "No migration tool detected for Express. Supported - typeorm, sequelize, knex"
+    {% endif %}
+    {% elif 'nextjs' in all_fw %}
+    - echo "Running migrations for Next.js..."
+    - npm run db:migrate || yarn db:migrate || true
+    {% else %}
+    - echo "No supported TypeScript/JavaScript backend framework detected for migrations. Detected: {{ all_fw | join(', ') }}"
+    {% endif %}
+  only:
+    - main
+    - develop
+

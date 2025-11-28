@@ -1,0 +1,31 @@
+  postgresql:
+    image: postgres:{{ service_config.version }}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-{{ service_config.db_name }}}
+      POSTGRES_USER: ${POSTGRES_USER:-{{ service_config.user }}}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-{{ service_config.password }}}
+    {% if service_config.volumes %}
+    volumes:
+      {% for vol in service_config.volumes %}
+      - {{ vol }}
+      {% endfor %}
+    {% endif %}
+    {% if service_config.ports %}
+    ports:
+      {% for port in service_config.ports %}
+      - "${POSTGRES_PORT:-{{ port }}}"
+      {% endfor %}
+    {% endif %}
+    {% if service_config.networks %}
+    networks:
+      {% for net in service_config.networks %}
+      - {{ net }}
+      {% endfor %}
+    {% endif %}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-{{ service_config.user }}}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+

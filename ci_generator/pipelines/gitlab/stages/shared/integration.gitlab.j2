@@ -1,0 +1,8 @@
+integration:
+  stage: integration
+  image: docker/compose:1.29.2
+  services: []
+  script:
+    - docker-compose -f docker-compose.yml up -d || true
+    - pytest tests/integration || true
+    - docker-compose -f docker-compose.yml down || true

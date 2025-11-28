@@ -1,0 +1,40 @@
+{% if ctx.use_docker_compose %}
+deploy:
+  stage: deploy
+  image: docker/compose:2.24.0
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  dependencies:
+    - docker_push
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" $CI_REGISTRY --password-stdin
+  script:
+    - |
+      # Экспортируем переменные для docker-compose
+      export CI_REGISTRY_IMAGE=$CI_REGISTRY_IMAGE
+      export IMAGE_TAG=${CI_COMMIT_SHORT_SHA:-latest}
+      
+      # Запускаем docker-compose
+      docker-compose -f docker-compose.yml pull || true
+      docker-compose -f docker-compose.yml up -d
+      
+      # Проверяем статус сервисов
+      docker-compose -f docker-compose.yml ps
+  environment:
+    name: production
+    url: http://$CI_PROJECT_NAME
+  when: manual
+  only:
+    - main
+    - master
+{% endif %}
+

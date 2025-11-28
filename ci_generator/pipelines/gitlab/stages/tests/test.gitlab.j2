@@ -1,0 +1,237 @@
+test:
+  stage: test
+  
+  {# Определяем image в зависимости от языка #}
+  {% if ctx.language == 'python' %}
+  image: python:{{ ctx.python_version | default('3.11') }}
+  {% elif ctx.language == 'typescript' or ctx.language == 'javascript' %}
+  image: node:{{ ctx.node_version | default('18') }}
+  {% elif ctx.language == 'go' or ctx.language == 'golang' %}
+  image: golang:{{ ctx.go_version | default('1.21') }}
+  {% elif ctx.language == 'java' %}
+  image: {{ ctx.build_image | default('maven:3.9-eclipse-temurin-17') }}
+  {% elif ctx.language == 'kotlin' %}
+  image: {{ ctx.build_image | default('gradle:8.5-jdk17') }}
+  {% else %}
+  image: alpine:latest
+  {% endif %}
+  
+  {# Кэширование в зависимости от языка #}
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      {% if ctx.language == 'python' %}
+      - .cache/pip
+      {% elif ctx.language in ['typescript', 'javascript'] %}
+      - node_modules/
+      {% elif ctx.language in ['go', 'golang'] %}
+      - .go/pkg/mod/
+      {% elif ctx.language in ['java', 'kotlin'] %}
+      {% if ctx.build_tool == 'maven' %}
+      - .m2/repository
+      {% elif ctx.build_tool == 'gradle' %}
+      - .gradle/caches
+      {% else %}
+      - .m2/repository
+      - .gradle/caches
+      {% endif %}
+      {% endif %}
+  
+  {# Before script для специфичных настроек #}
+  {% set has_before_script = ctx.language == 'python' or ctx.language in ['typescript', 'javascript'] or ctx.language in ['go', 'golang'] or (ctx.language in ['java', 'kotlin'] and ctx.build_tool) %}
+  {% if has_before_script %}
+  before_script:
+    {% if ctx.language == 'python' %}
+    - export PIP_CACHE_DIR=".cache/pip"
+    - python -m pip install --upgrade pip
+    {% elif ctx.language in ['typescript', 'javascript'] %}
+    - npm ci || yarn install --frozen-lockfile || true
+    {% elif ctx.language in ['go', 'golang'] %}
+    - mkdir -p .go
+    - export GOPATH=${CI_PROJECT_DIR}/.go
+    {% elif ctx.language == 'java' and ctx.build_tool == 'maven' %}
+    - export MAVEN_OPTS="-Dmaven.repo.local=${CI_PROJECT_DIR}/.m2/repository"
+    {% elif ctx.language in ['java', 'kotlin'] and ctx.build_tool == 'gradle' %}
+    - export GRADLE_USER_HOME=${CI_PROJECT_DIR}/.gradle
+    {% endif %}
+  {% endif %}
+  
+  script:
+    {# ============ PYTHON ============ #}
+    {% if ctx.language == 'python' %}
+    - pip install -r requirements.txt || pip install -r requirements-dev.txt || true
+    {% set runner = (ctx.analysis.test_runner or 'pytest').lower() %}
+    {% if runner == 'pytest' %}
+    - pip install pytest pytest-cov || true
+    - pytest --junitxml=test-results.xml --cov=. --cov-report=xml --cov-report=html --cov-report=term || true
+    {% elif runner == 'unittest' %}
+    - python -m unittest discover -s tests || true
+    {% elif runner in ['nose', 'nose2'] %}
+    - pip install nose2 || true
+    - nose2 -v --junit-xml || true
+    {% else %}
+    - echo "Unknown test runner: {{ runner }}, trying pytest" || true
+    - pip install pytest || true
+    - pytest || true
+    {% endif %}
+    {# ============ TYPESCRIPT/JAVASCRIPT ============ #}
+    {% elif ctx.language in ['typescript', 'javascript'] %}
+    - npm test -- --ci --coverage || yarn test --ci --coverage || true
+    {# ============ GO ============ #}
+    {% elif ctx.language in ['go', 'golang'] %}
+    - go mod download || true
+    - go test -v -race -coverprofile=coverage.out -covermode=atomic ./... || true
+    - go tool cover -html=coverage.out -o coverage.html || true
+    - go tool cover -func=coverage.out || true
+    {# ============ JAVA ============ #}
+    {% elif ctx.language == 'java' %}
+    {% if ctx.build_tool == 'maven' %}
+    - |
+      # Находим директорию с pom.xml
+      if [ -f "pom.xml" ]; then
+        mvn test || true
+        mvn jacoco:report || true
+      else
+        # Ищем pom.xml в поддиректориях
+        POM_DIR=$(find . -name "pom.xml" -type f | head -1 | xargs dirname)
+        if [ -n "$POM_DIR" ]; then
+          cd "$POM_DIR"
+          mvn test || true
+          mvn jacoco:report || true
+        else
+          echo "POM file not found, skipping tests"
+        fi
+      fi
+    {% elif ctx.build_tool == 'gradle' %}
+    - |
+      if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        ./gradlew test jacocoTestReport || gradle test jacocoTestReport || true
+      else
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+          ./gradlew test jacocoTestReport || gradle test jacocoTestReport || true
+        else
+          echo "Gradle build file not found, skipping tests"
+        fi
+      fi
+    {% else %}
+    - |
+      if [ -f "pom.xml" ]; then
+        mvn test jacoco:report || true
+      elif [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        ./gradlew test jacocoTestReport || true
+      else
+        POM_DIR=$(find . -name "pom.xml" -type f | head -1 | xargs dirname)
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$POM_DIR" ]; then
+          cd "$POM_DIR"
+          mvn test jacoco:report || true
+        elif [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+          ./gradlew test jacocoTestReport || true
+        else
+          echo "Build file not found, skipping tests"
+        fi
+      fi
+    {% endif %}
+    {# ============ KOTLIN ============ #}
+    {% elif ctx.language == 'kotlin' %}
+    {% if ctx.build_tool == 'gradle' %}
+    - |
+      if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        ./gradlew test jacocoTestReport || gradle test jacocoTestReport || true
+      else
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+          ./gradlew test jacocoTestReport || gradle test jacocoTestReport || true
+        else
+          echo "Gradle build file not found, skipping tests"
+        fi
+      fi
+    {% elif ctx.build_tool == 'maven' %}
+    - |
+      if [ -f "pom.xml" ]; then
+        mvn test jacoco:report || true
+      else
+        POM_DIR=$(find . -name "pom.xml" -type f | head -1 | xargs dirname)
+        if [ -n "$POM_DIR" ]; then
+          cd "$POM_DIR"
+          mvn test jacoco:report || true
+        else
+          echo "POM file not found, skipping tests"
+        fi
+      fi
+    {% else %}
+    - |
+      if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        ./gradlew test jacocoTestReport || true
+      else
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+          ./gradlew test jacocoTestReport || true
+        else
+          echo "Build file not found, skipping tests"
+        fi
+      fi
+    {% endif %}
+    {# ============ UNKNOWN LANGUAGE ============ #}
+    {% else %}
+    - echo "No test configuration for language: {{ ctx.language }}" || true
+    {% endif %}
+  
+  {# Coverage regex в зависимости от языка #}
+  {% if ctx.language == 'python' %}
+  coverage: '/(?i)total.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
+  {% elif ctx.language in ['go', 'golang'] %}
+  coverage: '/coverage: \d+.\d+% of statements/'
+  {% elif ctx.language in ['java', 'kotlin'] %}
+  coverage: '/Total.*?([0-9]{1,3})%/'
+  {% endif %}
+  
+  {# Artifacts в зависимости от языка #}
+  artifacts:
+    when: always
+    paths:
+      {% if ctx.language == 'python' %}
+      - test-results.xml
+      - coverage.xml
+      - htmlcov/
+      - .pytest_cache/
+      {% elif ctx.language in ['typescript', 'javascript'] %}
+      - coverage/
+      {% elif ctx.language in ['go', 'golang'] %}
+      - coverage.out
+      - coverage.html
+      {% elif ctx.language in ['java', 'kotlin'] %}
+      {% if ctx.build_tool == 'maven' %}
+      - target/site/jacoco/
+      - target/surefire-reports/
+      {% else %}
+      - build/reports/jacoco/test/
+      - build/test-results/
+      {% endif %}
+      {% endif %}
+    {% if ctx.language != 'go' and ctx.language != 'golang' %}
+    reports:
+      {% if ctx.language == 'python' %}
+      junit: test-results.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+      {% elif ctx.language in ['typescript', 'javascript'] %}
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage/cobertura-coverage.xml
+      {% elif ctx.language in ['java', 'kotlin'] %}
+      junit:
+        {% if ctx.build_tool == 'maven' %}
+        - target/surefire-reports/TEST-*.xml
+        {% else %}
+        - build/test-results/test/TEST-*.xml
+        {% endif %}
+      {% endif %}
+    {% endif %}
+    expire_in: 1 week

@@ -1,0 +1,49 @@
+security:
+  stage: security
+  image: {% if ctx.build_tool == 'maven' %}maven:3.9-eclipse-temurin-{{ ctx.java_version }}{% else %}gradle:8.5-jdk{{ ctx.java_version }}{% endif %}
+
+  script:
+    {% if ctx.build_tool == 'maven' %}
+    - |
+      # Находим директорию с pom.xml
+      if [ -f "pom.xml" ]; then
+        mvn org.owasp:dependency-check-maven:check || true
+        mvn com.github.spotbugs:spotbugs-maven-plugin:check || true
+      else
+        # Ищем pom.xml в поддиректориях
+        POM_DIR=$(find . -name "pom.xml" -type f | head -1 | xargs dirname)
+        if [ -n "$POM_DIR" ]; then
+          cd "$POM_DIR"
+          mvn org.owasp:dependency-check-maven:check || true
+          mvn com.github.spotbugs:spotbugs-maven-plugin:check || true
+        else
+          echo "POM file not found, skipping security checks"
+        fi
+      fi
+    {% elif ctx.build_tool == 'gradle' %}
+    - |
+      if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        ./gradlew dependencyCheckAnalyze || true
+        ./gradlew spotbugsMain || true
+      else
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+          ./gradlew dependencyCheckAnalyze || true
+          ./gradlew spotbugsMain || true
+        else
+          echo "Gradle build file not found, skipping security checks"
+        fi
+      fi
+    {% endif %}
+  artifacts:
+    paths:
+      {% if ctx.build_tool == 'maven' %}
+      - target/dependency-check-report.html
+      - target/spotbugsXml.xml
+      {% elif ctx.build_tool == 'gradle' %}
+      - build/reports/dependency-check-report.html
+      - build/reports/spotbugs/
+      {% endif %}
+    expire_in: 1 week
+

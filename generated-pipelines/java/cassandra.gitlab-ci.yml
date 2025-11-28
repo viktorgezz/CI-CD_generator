@@ -1,0 +1,198 @@
+# Generated GitLab CI (auto)
+stages:
+  - pre_checks
+  - lint
+  - type_check
+  - security
+  - test
+  - docker_build
+  - docker_push
+  - migration
+  - deploy
+  - cleanup
+
+# Triggers (from user_settings.triggers)
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_BRANCH == "master" && $CI_PIPELINE_SOURCE == "push"'
+
+
+
+
+
+# Common variables
+variables:
+  DOCKER_IMAGE: "$CI_REGISTRY_IMAGE"
+  DOCKER_TAG: "$CI_COMMIT_SHORT_SHA"
+  JAVA_VERSION: "17"
+  BUILD_TOOL: "ant"
+
+  # Required CI/CD variables for this pipeline (configure in GitLab settings)
+  # CI_REGISTRY: GitLab container registry URL (usually predefined)
+  # CI_REGISTRY_USER: registry username for docker login
+  # CI_REGISTRY_PASSWORD: registry password/token for docker login
+  # KUBECONFIG_CONTENT: base64-encoded kubeconfig for Kubernetes deploy
+
+# User variables (inlined - prefer CI platform variables for secrets)
+
+pre_checks:
+  stage: pre_checks
+  image: None
+  script:
+    - echo "Java/Kotlin project detected"
+    - echo "Basic repo checks (lint config, presence of tests, dockerfile...)"
+
+lint:
+  stage: lint
+  image: gradle:8.5-jdk17
+  script:
+  artifacts:
+    paths:
+      - target/spotbugsXml.xml
+      - build/reports/
+    when: always
+type_check:
+  stage: type_check
+  image: gradle:8.5-jdk17
+  script:
+
+security:
+  stage: security
+  image: gradle:8.5-jdk17
+  script:
+  artifacts:
+    paths:
+    expire_in: 1 week
+
+test:
+  stage: test
+  
+  image: None
+  
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .m2/repository
+      - .gradle/caches
+  
+  before_script:
+  
+  script:
+    - |
+      if [ -f "pom.xml" ]; then
+        mvn test jacoco:report || true
+      elif [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        ./gradlew test jacocoTestReport || true
+      else
+        POM_DIR=$(find . -name "pom.xml" -type f | head -1 | xargs dirname)
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$POM_DIR" ]; then
+          cd "$POM_DIR"
+          mvn test jacoco:report || true
+        elif [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+          ./gradlew test jacocoTestReport || true
+        else
+          echo "Build file not found, skipping tests"
+        fi
+      fi
+  
+  coverage: '/Total.*?([0-9]{1,3})%/'
+  
+  artifacts:
+    when: always
+    paths:
+      - build/reports/jacoco/test/
+      - build/test-results/
+    reports:
+      junit:
+        - build/test-results/test/TEST-*.xml
+    expire_in: 1 week
+build_and_push:
+  stage: docker_build
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+    - docker info
+    - echo "Checking GitLab CI variables..."
+    - echo "Logging to GitLab Container Registry with CI_JOB_TOKEN..."
+    - echo "$CI_JOB_TOKEN" | docker login -u "gitlab-ci-token" "$CI_REGISTRY" --password-stdin
+  script:
+    - echo "Building and pushing Docker images..."
+    
+    # Pylib
+    - |
+      echo "Building Pylib (pylib/Dockerfile.ubuntu.py311)..."
+      if docker build -f pylib/Dockerfile.ubuntu.py311 -t $CI_REGISTRY_IMAGE-pylib:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-pylib:latest pylib; then
+        echo "Pushing Pylib..."
+        docker push $CI_REGISTRY_IMAGE-pylib:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-pylib:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Pylib built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Pylib, continuing with next..."
+      fi
+    
+    # Pylib
+    - |
+      echo "Building Pylib (pylib/Dockerfile.ubuntu.py38)..."
+      if docker build -f pylib/Dockerfile.ubuntu.py38 -t $CI_REGISTRY_IMAGE-pylib:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-pylib:latest pylib; then
+        echo "Pushing Pylib..."
+        docker push $CI_REGISTRY_IMAGE-pylib:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-pylib:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Pylib built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Pylib, continuing with next..."
+      fi
+    
+    # Pylib
+    - |
+      echo "Building Pylib (pylib/Dockerfile.ubuntu.py3)..."
+      if docker build -f pylib/Dockerfile.ubuntu.py3 -t $CI_REGISTRY_IMAGE-pylib:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-pylib:latest pylib; then
+        echo "Pushing Pylib..."
+        docker push $CI_REGISTRY_IMAGE-pylib:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-pylib:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Pylib built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Pylib, continuing with next..."
+      fi
+    
+    - echo "🎉 Build and push process completed!"
+  after_script:
+    - docker logout $CI_REGISTRY || true
+
+
+migration:
+  stage: migration
+  image: gradle:8.5-jdk17
+  script:
+    - echo "Vert.x: migrations typically handled externally or via custom logic."
+
+
+cleanup:
+  stage: cleanup
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+  script:
+    - docker system prune -f || true

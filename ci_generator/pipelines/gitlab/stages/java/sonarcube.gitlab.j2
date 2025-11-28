@@ -1,0 +1,63 @@
+code_quality:
+  stage: code_quality
+  image: {{ ctx.build_image | default('maven:3.9-eclipse-temurin-17') }}
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .m2/repository
+      - .gradle/caches
+      - .sonar/cache
+  dependencies:
+    - test
+    - lint
+  before_script:
+    {% if ctx.build_tool == 'maven' %}
+    - export MAVEN_OPTS="-Dmaven.repo.local=${CI_PROJECT_DIR}/.m2/repository"
+    {% elif ctx.build_tool == 'gradle' %}
+    - export GRADLE_USER_HOME=${CI_PROJECT_DIR}/.gradle
+    {% endif %}
+  script:
+    {% if ctx.build_tool == 'maven' %}
+    - mvn sonar:sonar \
+        -Dsonar.projectKey=${CI_PROJECT_NAME} \
+        -Dsonar.host.url=${SONAR_HOST_URL} \
+        -Dsonar.login=${SONAR_TOKEN} \
+        {% if ctx.language == 'java' %}
+        -Dsonar.java.binaries=target/classes \
+        -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml \
+        {% elif ctx.language == 'kotlin' %}
+        -Dsonar.language=kotlin \
+        -Dsonar.java.binaries=target/classes \
+        -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml \
+        {% endif %}
+        || true
+    
+    {% elif ctx.build_tool == 'gradle' %}
+    - ./gradlew sonar \
+        -Dsonar.projectKey=${CI_PROJECT_NAME} \
+        -Dsonar.host.url=${SONAR_HOST_URL} \
+        -Dsonar.login=${SONAR_TOKEN} \
+        {% if ctx.language == 'kotlin' %}
+        -Dsonar.language=kotlin \
+        {% endif %}
+        || gradle sonar \
+        -Dsonar.projectKey=${CI_PROJECT_NAME} \
+        -Dsonar.host.url=${SONAR_HOST_URL} \
+        -Dsonar.login=${SONAR_TOKEN} \
+        || true
+    
+    {% else %}
+    # Попытка определить build tool автоматически
+    - mvn sonar:sonar \
+        -Dsonar.projectKey=${CI_PROJECT_NAME} \
+        -Dsonar.host.url=${SONAR_HOST_URL} \
+        -Dsonar.login=${SONAR_TOKEN} \
+        || ./gradlew sonar \
+        -Dsonar.projectKey=${CI_PROJECT_NAME} \
+        -Dsonar.host.url=${SONAR_HOST_URL} \
+        -Dsonar.login=${SONAR_TOKEN} \
+        || true
+    {% endif %}
+  only:
+    - merge_requests
+    - main

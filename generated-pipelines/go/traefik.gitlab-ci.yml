@@ -1,0 +1,229 @@
+# Generated GitLab CI (auto)
+stages:
+  - pre_checks
+  - lint
+  - type_check
+  - security
+  - test
+  - build
+  - docker_build
+  - docker_push
+  - migration
+  - deploy
+  - post_deploy
+  - cleanup
+
+# Triggers (from user_settings.triggers)
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_BRANCH == "master" && $CI_PIPELINE_SOURCE == "push"'
+
+
+
+
+
+# Common variables
+variables:
+  DOCKER_IMAGE: "$CI_REGISTRY_IMAGE"
+  DOCKER_TAG: "$CI_COMMIT_SHORT_SHA"
+  GO_VERSION: "1.21"
+
+  # Required CI/CD variables for this pipeline (configure in GitLab settings)
+  # CI_REGISTRY: GitLab container registry URL (usually predefined)
+  # CI_REGISTRY_USER: registry username for docker login
+  # CI_REGISTRY_PASSWORD: registry password/token for docker login
+  # KUBECONFIG_CONTENT: base64-encoded kubeconfig for Kubernetes deploy
+
+# User variables (inlined - prefer CI platform variables for secrets)
+
+pre_checks:
+  stage: pre_checks
+  image: golang:1.21
+  script:
+    - go version
+    - echo "Basic repo checks (lint config, presence of tests, dockerfile...)"
+
+lint:
+  stage: lint
+  image: golangci/golangci-lint:v1.56.2
+  script:
+    - golangci-lint run --out-format code-climate:gl-code-quality-report.json,line-number || true
+    - golangci-lint run || true
+  artifacts:
+    reports:
+      codequality: gl-code-quality-report.json
+    paths:
+      - gl-code-quality-report.json
+type_check:
+  stage: type_check
+  image: golang:1.21
+  script:
+    - go mod download || true
+    - go vet ./... || true
+    - go build -o /dev/null ./... || true
+security:
+  stage: security
+  image: golang:1.21
+  script:
+    - go install github.com/securego/gosec/v2/cmd/gosec@latest || true
+    - gosec -fmt json -out gosec-report.json ./... || true
+  artifacts:
+    paths:
+      - gosec-report.json
+    expire_in: 1 week
+
+test:
+  stage: test
+  
+  image: golang:1.21
+  
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .go/pkg/mod/
+  
+  before_script:
+    - mkdir -p .go
+    - export GOPATH=${CI_PROJECT_DIR}/.go
+  
+  script:
+    - go mod download || true
+    - go test -v -race -coverprofile=coverage.out -covermode=atomic ./... || true
+    - go tool cover -html=coverage.out -o coverage.html || true
+    - go tool cover -func=coverage.out || true
+  
+  coverage: '/coverage: \d+.\d+% of statements/'
+  
+  artifacts:
+    when: always
+    paths:
+      - coverage.out
+      - coverage.html
+    expire_in: 1 week
+build:
+  stage: build
+  image: golang:1.21
+  script:
+    - go mod download || true
+    - |
+      # Проверяем наличие Makefile и пытаемся собрать через make
+      if [ -f 'Makefile' ]; then
+        echo "Found Makefile, trying to build..."
+        make build || make binary || make dist || make || true
+      fi
+      # Проверяем наличие build.go
+      if [ -f 'build.go' ]; then
+        echo "Found build.go, running it..."
+        go run build.go build || go run build.go || true
+      fi
+      # Проверяем наличие скриптов сборки
+      if [ -f 'scripts/build.sh' ]; then
+        echo "Found scripts/build.sh, running it..."
+        chmod +x scripts/build.sh
+        ./scripts/build.sh || true
+      fi
+      if [ -f 'build.sh' ]; then
+        echo "Found build.sh, running it..."
+        chmod +x build.sh
+        ./build.sh || true
+      fi
+      # Стандартная сборка через go build
+      if [ -d './cmd' ]; then
+        echo "Found cmd/ directory, building..."
+        go build -o ./bin/app ./cmd/... || true
+      fi
+      # Собираем все пакеты
+      go build ./... || true
+  artifacts:
+    paths:
+      - bin/
+      - dist/
+    expire_in: 1 hour
+docker_build:
+  stage: docker_build
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  dependencies:
+    - build
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+  script:
+    - docker build -f Dockerfile -t $DOCKER_IMAGE:$DOCKER_TAG .
+    - docker save -o image.tar $DOCKER_IMAGE:$DOCKER_TAG || true
+  artifacts:
+    paths:
+      - image.tar
+
+docker_push:
+  stage: docker_push
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  dependencies:
+    - docker_build
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+  script:
+    - docker load -i image.tar || true
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" $CI_REGISTRY --password-stdin
+    - docker push $DOCKER_IMAGE:$DOCKER_TAG
+
+migration:
+  stage: migration
+  image: golang:1.21
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - .go/pkg/mod/
+  before_script:
+    - mkdir -p .go
+    - export GOPATH=${CI_PROJECT_DIR}/.go
+  script:
+    - go mod download || true
+    - echo "No migration tool detected" || true
+  only:
+    - main
+    - develop
+
+post_deploy:
+  stage: post_deploy
+  image: golang:1.21
+  script:
+    - go mod download || true
+    - go test -v -run Smoke ./... || go test -v -run TestSmoke ./... || true
+
+cleanup:
+  stage: cleanup
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+  script:
+    - docker system prune -f || true

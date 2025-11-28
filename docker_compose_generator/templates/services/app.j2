@@ -1,0 +1,41 @@
+  {{ service_name }}:
+    {% if service_config.use_gitlab_registry %}
+    # Используем образ из GitLab Container Registry
+    image: ${CI_REGISTRY_IMAGE{% if service_config.service_suffix %}-{{ service_config.service_suffix }}{% endif %}:${IMAGE_TAG:-latest}
+    {% else %}
+    # Собираем образ локально
+    build:
+      context: {{ service_config.docker_context or '.' }}
+      dockerfile: {{ service_config.dockerfile_path or 'Dockerfile' }}
+    {% endif %}
+    
+    {% if service_config.ports %}
+    ports:
+      {% for port in service_config.ports %}
+      - "${PORT_{{ service_name | upper }}_{{ port }}:-{{ port }}:{{ port }}}"
+      {% endfor %}
+    {% endif %}
+    
+    {% if service_config.environment %}
+    environment:
+      {% for key, value in service_config.environment.items() %}
+      - {{ key }}={{ value }}
+      {% endfor %}
+    {% endif %}
+    
+    {% if service_config.depends_on %}
+    depends_on:
+      {% for dep in service_config.depends_on %}
+      - {{ dep }}
+      {% endfor %}
+    {% endif %}
+    
+    {% if service_config.networks %}
+    networks:
+      {% for net in service_config.networks %}
+      - {{ net }}
+      {% endfor %}
+    {% endif %}
+    
+    restart: unless-stopped
+

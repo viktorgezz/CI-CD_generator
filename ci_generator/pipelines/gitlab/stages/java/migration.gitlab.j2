@@ -1,0 +1,83 @@
+migration:
+  stage: migration
+  image: {% if ctx.build_tool == 'maven' %}maven:3.9-eclipse-temurin-{{ ctx.java_version }}{% else %}gradle:8.5-jdk{{ ctx.java_version }}{% endif %}
+
+  script:
+    {% if ctx.build_tool == 'maven' %}
+    - |
+      # Находим директорию с pom.xml
+      if [ -f "pom.xml" ]; then
+        POM_DIR="."
+      else
+        POM_DIR=$(find . -name "pom.xml" -type f | head -1 | xargs dirname)
+        if [ -n "$POM_DIR" ]; then
+          cd "$POM_DIR"
+        else
+          echo "POM file not found, skipping migrations"
+          exit 0
+        fi
+      fi
+    {% elif ctx.build_tool == 'gradle' %}
+    - |
+      if [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+        GRADLE_DIR="."
+      else
+        GRADLE_DIR=$(find . -name "build.gradle*" -type f | head -1 | xargs dirname)
+        if [ -n "$GRADLE_DIR" ]; then
+          cd "$GRADLE_DIR"
+        else
+          echo "Gradle build file not found, skipping migrations"
+          exit 0
+        fi
+      fi
+    {% endif %}
+    {% set frameworks = (ctx.analysis.frameworks or []) | map('lower') | list %}
+    {% set backend_frameworks = (ctx.analysis.backend_frameworks or []) | map('lower') | list %}
+    {% set all_fw = frameworks + backend_frameworks %}
+    {% set deps = (ctx.analysis.dependencies or []) | map('lower') | list %}
+    {% if 'spring-boot' in all_fw or 'spring boot' in all_fw or 'spring' in all_fw %}
+    {% if 'flyway-core' in deps %}
+    - echo "Running Flyway migrations (Spring Boot)..."
+    {% if ctx.build_tool == 'maven' %}- mvn flyway:migrate{% else %}- ./gradlew flywayMigrate{% endif %}
+    {% elif 'liquibase-core' in deps %}
+    - echo "Running Liquibase migrations (Spring Boot)..."
+    {% if ctx.build_tool == 'maven' %}- mvn liquibase:update{% else %}- ./gradlew liquibaseUpdate{% endif %}
+    {% else %}
+    - echo "No migration tool detected for Spring Boot."
+    {% endif %}
+    {% elif 'quarkus' in frameworks %}
+    {% if 'quarkus-flyway' in deps or 'flyway-core' in deps %}
+    - echo "Running Flyway migrations (Quarkus)..."
+    {% if ctx.build_tool == 'maven' %}- mvn quarkus:dev -Dquarkus.profile=prod -Dquarkus.flyway.migrate-at-start=false && mvn compile quarkus:flyway-migrate{% else %}- ./gradlew quarkusDev --args='--profile=prod' && ./gradlew quarkusFlywayMigrate{% endif %}
+    {% elif 'quarkus-liquibase' in deps %}
+    - echo "Running Liquibase migrations (Quarkus)..."
+    {% if ctx.build_tool == 'maven' %}- mvn compile quarkus:liquibase-update{% else %}- ./gradlew quarkusLiquibaseUpdate{% endif %}
+    {% else %}
+    - echo "No migration tool detected for Quarkus."
+    {% endif %}
+    {% elif 'micronaut' in frameworks %}
+    {% if 'micronaut-flyway' in deps or 'flyway-core' in deps %}
+    - echo "Running Flyway migrations (Micronaut)..."
+    {% if ctx.build_tool == 'maven' %}- mvn exec:java -Dexec.mainClass="io.micronaut.flyway.FlywayRunner"{% else %}- ./gradlew run --args='flyway migrate'{% endif %}
+    {% elif 'micronaut-liquibase' in deps %}
+    - echo "Running Liquibase migrations (Micronaut)..."
+    {% if ctx.build_tool == 'maven' %}- mvn liquibase:update{% else %}- ./gradlew liquibaseUpdate{% endif %}
+    {% else %}
+
+    - echo "No migration tool detected for Micronaut."
+    {% endif %}
+    {% elif 'ktor' in frameworks %}
+    - echo "Ktor: manual migration setup expected (e.g., via Exposed + Flyway)."
+    {% if 'flyway-core' in deps %}
+    - echo "Running Flyway (standalone) for Ktor..."
+    {% if ctx.build_tool == 'maven' %}- mvn exec:java -Dexec.mainClass="MigrationsKt"{% else %}- ./gradlew run --args='migrate'{% endif %}
+    {% endif %}
+    {% elif 'vert.x' in frameworks or 'vertx' in frameworks %}
+    - echo "Vert.x: migrations typically handled externally or via custom logic."
+    {% if 'flyway-core' in deps %}
+    - echo "Running Flyway (standalone) for Vert.x..."
+    {% if ctx.build_tool == 'maven' %}- mvn exec:java -Dexec.mainClass="io.vertx.example.Migration"{% else %}- ./gradlew runMigration{% endif %}
+    {% endif %}
+    {% else %}
+    - echo "No supported Java/Kotlin framework detected for migrations. Detected: {{ all_fw | join(', ') }}"
+    {% endif %}

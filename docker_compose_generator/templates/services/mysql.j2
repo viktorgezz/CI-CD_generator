@@ -1,0 +1,32 @@
+  mysql:
+    image: mysql:{{ service_config.version }}
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-{{ service_config.db_name }}}
+      MYSQL_USER: ${MYSQL_USER:-{{ service_config.user }}}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-{{ service_config.password }}}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-{{ service_config.root_password }}}
+    {% if service_config.volumes %}
+    volumes:
+      {% for vol in service_config.volumes %}
+      - {{ vol }}
+      {% endfor %}
+    {% endif %}
+    {% if service_config.ports %}
+    ports:
+      {% for port in service_config.ports %}
+      - "${MYSQL_PORT:-{{ port }}}"
+      {% endfor %}
+    {% endif %}
+    {% if service_config.networks %}
+    networks:
+      {% for net in service_config.networks %}
+      - {{ net }}
+      {% endfor %}
+    {% endif %}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+

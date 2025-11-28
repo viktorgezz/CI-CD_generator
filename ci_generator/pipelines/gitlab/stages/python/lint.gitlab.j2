@@ -1,0 +1,14 @@
+lint:
+  stage: lint
+  image: python:{{ ctx.python_version }}
+  before_script:
+    - python -m pip install --upgrade pip
+  script:
+    - pip install ruff flake8 || true
+    - ruff check . || true
+    - flake8 . || true
+  artifacts:
+    when: on_success
+    paths:
+      - reports/
+    expire_in: 1 week

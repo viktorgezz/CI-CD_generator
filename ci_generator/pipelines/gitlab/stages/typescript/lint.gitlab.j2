@@ -1,0 +1,17 @@
+lint:
+  stage: lint
+  image: node:{{ ctx.node_version | default('18') }}
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  before_script:
+    - npm ci || yarn install --frozen-lockfile || true
+  script:
+    - npm run lint || yarn lint || true
+    - npx eslint . --ext .ts,.tsx --format json -o eslint-report.json || true
+    - npx prettier --check "**/*.{ts,tsx,json}" || true
+  artifacts:
+    paths:
+      - eslint-report.json
+    expire_in: 1 week

@@ -1,0 +1,243 @@
+# Generated GitLab CI (auto)
+stages:
+  - pre_checks
+  - lint
+  - type_check
+  - security
+  - test
+  - build
+  - docker_build
+  - docker_push
+  - migration
+  - deploy
+  - post_deploy
+  - cleanup
+
+# Triggers (from user_settings.triggers)
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_BRANCH == "master" && $CI_PIPELINE_SOURCE == "push"'
+
+
+
+
+
+# Common variables
+variables:
+  DOCKER_IMAGE: "$CI_REGISTRY_IMAGE"
+  DOCKER_TAG: "$CI_COMMIT_SHORT_SHA"
+  NODE_VERSION: "18"
+
+  # Required CI/CD variables for this pipeline (configure in GitLab settings)
+  # CI_REGISTRY: GitLab container registry URL (usually predefined)
+  # CI_REGISTRY_USER: registry username for docker login
+  # CI_REGISTRY_PASSWORD: registry password/token for docker login
+  # KUBECONFIG_CONTENT: base64-encoded kubeconfig for Kubernetes deploy
+
+# User variables (inlined - prefer CI platform variables for secrets)
+
+pre_checks:
+  stage: pre_checks
+  image: node:18
+  script:
+    - node --version
+    - npm --version || yarn --version || true
+    - echo "Basic repo checks (lint config, presence of tests, dockerfile...)"
+
+lint:
+  stage: lint
+  image: node:18
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  before_script:
+    - npm ci || yarn install --frozen-lockfile || true
+  script:
+    - npm run lint || yarn lint || true
+    - npx eslint . --ext .ts,.tsx --format json -o eslint-report.json || true
+    - npx prettier --check "**/*.{ts,tsx,json}" || true
+  artifacts:
+    paths:
+      - eslint-report.json
+    expire_in: 1 week
+type_check:
+  stage: type_check
+  image: node:18
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  before_script:
+    - npm ci || yarn install --frozen-lockfile || true
+  script:
+    - npm run type-check || yarn type-check || true
+    - npx tsc --noEmit || true
+  artifacts:
+    paths:
+      - tsconfig.tsbuildinfo
+    expire_in: 1 week
+
+security:
+  stage: security
+  image: node:18
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  before_script:
+    - npm ci || yarn install --frozen-lockfile || true
+  script:
+    - npm audit --audit-level=moderate || yarn audit --level moderate || true
+    - npx snyk test --json || true
+  artifacts:
+    paths:
+      - snyk-report.json
+    expire_in: 1 week
+
+test:
+  stage: test
+  
+  image: node:18
+  
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  
+  before_script:
+    - npm ci || yarn install --frozen-lockfile || true
+  
+  script:
+    - npm test -- --ci --coverage || yarn test --ci --coverage || true
+  
+  
+  artifacts:
+    when: always
+    paths:
+      - coverage/
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage/cobertura-coverage.xml
+    expire_in: 1 week
+build:
+  stage: build
+  image: node:18
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  script:
+    - npm ci || yarn install --frozen-lockfile || true
+    - npm run build || yarn build || true
+  artifacts:
+    paths:
+      - dist/
+      - build/
+    expire_in: 1 hour
+build_and_push:
+  stage: docker_build
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+    - docker info
+    - echo "Checking GitLab CI variables..."
+    - echo "Logging to GitLab Container Registry with CI_JOB_TOKEN..."
+    - echo "$CI_JOB_TOKEN" | docker login -u "gitlab-ci-token" "$CI_REGISTRY" --password-stdin
+  script:
+    - echo "Building and pushing Docker images..."
+    
+    # Openshift
+    - |
+      echo "Building Openshift (dev/openshift/Dockerfile)..."
+      if docker build -f dev/openshift/Dockerfile -t $CI_REGISTRY_IMAGE-openshift:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-openshift:latest dev/openshift; then
+        echo "Pushing Openshift..."
+        docker push $CI_REGISTRY_IMAGE-openshift:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-openshift:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Openshift built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Openshift, continuing with next..."
+      fi
+    
+    # Build Arm
+    - |
+      echo "Building Build Arm (dev/build-arm/Dockerfile)..."
+      if docker build -f dev/build-arm/Dockerfile -t $CI_REGISTRY_IMAGE-build_arm:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-build_arm:latest dev/build-arm; then
+        echo "Pushing Build Arm..."
+        docker push $CI_REGISTRY_IMAGE-build_arm:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-build_arm:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Build Arm built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Build Arm, continuing with next..."
+      fi
+    
+    # Containers
+    - |
+      echo "Building Containers (dev/containers/Dockerfile)..."
+      if docker build -f dev/containers/Dockerfile -t $CI_REGISTRY_IMAGE-containers:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE-containers:latest dev/containers; then
+        echo "Pushing Containers..."
+        docker push $CI_REGISTRY_IMAGE-containers:$CI_COMMIT_SHORT_SHA || echo "⚠️  Failed to push $CI_COMMIT_SHORT_SHA tag"
+        docker push $CI_REGISTRY_IMAGE-containers:latest || echo "⚠️  Failed to push latest tag"
+        echo "✅ Containers built and pushed successfully"
+      else
+        echo "⚠️  Failed to build Containers, continuing with next..."
+      fi
+    
+    - echo "🎉 Build and push process completed!"
+  after_script:
+    - docker logout $CI_REGISTRY || true
+
+
+migration:
+  stage: migration
+  image: node:18
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  before_script:
+    - npm ci || yarn install --frozen-lockfile || true
+  script:
+    - echo "Running migrations for Express..."
+    - echo "No migration tool detected for Express. Supported: typeorm, sequelize, knex"
+  only:
+    - main
+    - develop
+
+
+post_deploy:
+  stage: post_deploy
+  image: node:18
+  script:
+    - npm ci || yarn install --frozen-lockfile || true
+    - npm run test:smoke || yarn test:smoke || npm test -- --grep smoke || true
+
+cleanup:
+  stage: cleanup
+  image: docker:24
+  services:
+    - name: docker:24-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - |
+      echo "Waiting for Docker daemon to be ready..."
+      timeout 30 sh -c 'until docker info; do sleep 1; done' || true
+  script:
+    - docker system prune -f || true

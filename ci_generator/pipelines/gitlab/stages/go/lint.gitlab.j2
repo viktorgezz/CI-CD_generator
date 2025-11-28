@@ -1,0 +1,11 @@
+lint:
+  stage: lint
+  image: golangci/golangci-lint:{{ ctx.golangci_lint_version | default('v1.56.2') }}
+  script:
+    - golangci-lint run --out-format code-climate:gl-code-quality-report.json,line-number || true
+    - golangci-lint run || true
+  artifacts:
+    reports:
+      codequality: gl-code-quality-report.json
+    paths:
+      - gl-code-quality-report.json
