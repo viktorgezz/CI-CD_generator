@@ -11,7 +11,7 @@ CLI приложение для автоматического анализа т
 
 **Лулаков Даниил** - Dev-ops, Team-Lead
 
-**Гезенцвей Виктор** - Project Manager, Architect, Designer
+**Гезенцвей Виктор** - Project Manager, Architect, Designer [сертификат](<./Хакатон Т1 Москва Certificate_2025-12-17_12_36_36.112Z.pdf>)
 
 **Колесникова Лариса** - Dev-ops, QA
 
